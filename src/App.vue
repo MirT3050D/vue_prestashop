@@ -13,8 +13,8 @@ elements[0] = {
   url: "url"
 };
 elements[1] = {
-  label: "Listra",
-  url: "url"
+  label: "Liste",
+  url: "/listProduct"
 };
 </script>
 

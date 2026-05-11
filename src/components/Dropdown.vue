@@ -39,7 +39,7 @@ function clickOnDropDown() {
         />
         <div class="elements" v-if="click" v-for="content in contents">
             <ul>
-                <RouterLink to="content.url">
+                <RouterLink :to="content.url">
                     <li>
                         {{ content.label }}
                     </li>

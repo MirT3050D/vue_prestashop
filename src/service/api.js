@@ -1,16 +1,18 @@
 import axios from 'axios';
-import { XMLBuilder, XMLParser } from 'fast-xml-parser';
+import { XMLParser } from 'fast-xml-parser';
+import XMLBuilder from 'fast-xml-builder';
 
 const urlBase = import.meta.env.VITE_API_URL;
+const apiKey = '4TL3WHGWM1LYH3QMDN2ZMXLY7IGUXK5N';
+const basicAuthHeader = `Basic ${btoa(`${apiKey}:`)}`;
 
 export const api = axios.create({
   // Utilise l'URL exacte qui fonctionne
   baseURL: urlBase,
-  auth: {
-    username: '4TL3WHGWM1LYH3QMDN2ZMXLY7IGUXK5N', // Exemple: 1A2B3C4D5E6F...
-    password: '' // Toujours vide pour PrestaShop
+  headers: {
+    Authorization: basicAuthHeader
   },
-  params: {
+  params: { 
     output_format: 'JSON'
   }
 });
@@ -26,42 +28,51 @@ const xmlBuilder = new XMLBuilder({
   format: true
 });
 
-const isXmlString = (value) => typeof value === 'string' && value.trim().startsWith('<');
+function isXmlString(value) {
+  return typeof value === 'string' && value.trim().startsWith('<');
+}
 
-const parseXmlSafe = (xml) => {
+function parseXmlSafe(xml) {
   try {
     return xmlParser.parse(xml);
   } catch (error) {
     return xml;
   }
-};
+}
 
-const parseResponseData = (data) => (isXmlString(data) ? parseXmlSafe(data) : data);
+function parseResponseData(data) {
+  return isXmlString(data) ? parseXmlSafe(data) : data;
+}
 
-export const parsePrestaXml = (xmlString) => xmlParser.parse(xmlString);
+export function parsePrestaXml(xmlString) {
+  return xmlParser.parse(xmlString);
+}
 
-export const buildPrestaXml = (payload) =>
-  typeof payload === 'string' ? payload : xmlBuilder.build(payload);
+export function buildPrestaXml(payload) {
+  return typeof payload === 'string' ? payload : xmlBuilder.build(payload);
+}
 
-const withXmlDefaults = (config = {}) => ({
-  ...config,
-  responseType: 'text',
-  params: {
-    output_format: 'XML',
-    ...(config.params || {})
-  },
-  headers: {
-    Accept: 'application/xml',
-    ...(config.headers || {})
-  }
-});
+function withXmlDefaults(config = {}) {
+  return {
+    ...config,
+    responseType: 'text',
+    params: {
+      output_format: 'XML',
+      ...(config.params || {})
+    },
+    headers: {
+      Accept: 'application/xml',
+      ...(config.headers || {})
+    }
+  };
+}
 
-export const getXml = async (url, config) => {
+export async function getXml(url, config) {
   const response = await api.get(url, withXmlDefaults(config));
   return parseResponseData(response.data);
-};
+}
 
-export const postXml = async (url, payload, config) => {
+export async function postXml(url, payload, config) {
   const body = buildPrestaXml(payload);
   const response = await api.post(url, body, {
     ...withXmlDefaults(config),
@@ -71,21 +82,22 @@ export const postXml = async (url, payload, config) => {
     }
   });
   return parseResponseData(response.data);
-};
+}
 
-export const putXml = async (url, payload, config) => {
+export async function putXml(url, payload, config) {
   const body = buildPrestaXml(payload);
   const response = await api.put(url, body, {
     ...withXmlDefaults(config),
     headers: {
       'Content-Type': 'application/xml',
+      
       ...(config?.headers || {})
     }
   });
   return parseResponseData(response.data);
-};
+}
 
-export const deleteXml = async (url, config) => {
+export async function deleteXml(url, config) {
   const response = await api.delete(url, withXmlDefaults(config));
   return parseResponseData(response.data);
-};
+}

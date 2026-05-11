@@ -1,28 +1,25 @@
 <template>
   <div class="table-container">
+    <h1>
+      Liste de tous les {{ props.module }}
+    </h1>
     <table class="styled-table">
       <thead>
         <tr>
-          <th>ID</th>
-          <th>Produit</th>
-          <th>Prix HT</th>
-          <th>État</th>
-          <th>Actions</th>
+          <th v-for="column in props.columns" :key="column">
+            {{ column }}
+          </th>
+          <th>actions</th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="item in items" :key="item.id">
-          <td>#{{ item.id }}</td>
-          <td class="product-name">{{ item.name }}</td>
-          <td>{{ item.price }} €</td>
-          <td>
-            <span :class="['badge', item.active === '1' ? 'active' : 'inactive']">
-              {{ item.active === '1' ? 'En ligne' : 'Hors ligne' }}
-            </span>
+        <tr v-for="(object, rowIndex) in props.data" :key="resolveRowKey(object, rowIndex)">
+          <td v-for="column in props.columns" :key="`${rowIndex}-${column}`">
+            {{ object[column] }}
           </td>
-          <td class="actions">
-            <button @click="editItem(item)" class="btn-edit">✏️</button>
-            <button @click="deleteItem(item.id)" class="btn-delete">🗑️</button>
+          <td v-if="props.showActions" class="actions">
+            <button @click="editItem(object)" class="btn-edit">✏️</button>
+            <button @click="deleteItem(object)" class="btn-delete">🗑️</button>
           </td>
         </tr>
       </tbody>
@@ -31,11 +28,50 @@
 </template>
 
 <script setup>
-const props = defineProps(['items']);
+const props = defineProps({
+  module: {
+    type: String,
+    required: true
+  },
+  data: {
+    type: Array,
+    default: () => []
+  },
+  columns: {
+    type: Array,
+    default: () => []
+  },
+  rowKey: {
+    type: String,
+    default: ''
+  },
+  showActions: {
+    type: Boolean,
+    default: true
+  }
+});
 const emit = defineEmits(['edit', 'delete']);
 
 const editItem = (item) => emit('edit', item);
-const deleteItem = (id) => emit('delete', id);
+const deleteItem = (item) => emit('delete', item);
+
+const resolveRowKey = (item, rowIndex) => {
+  const candidates = [
+    props.rowKey,
+    'id',
+    'id_product',
+    `id_${props.module}`.toLowerCase(),
+    `id_${props.module}`
+  ].filter(Boolean);
+
+  for (const key of candidates) {
+    if (item?.[key] != null) {
+      return item[key];
+    }
+  }
+
+  return rowIndex;
+};
 </script>
 
 <style scoped>
@@ -43,7 +79,7 @@ const deleteItem = (id) => emit('delete', id);
   background: white;
   border-radius: 10px;
   overflow: hidden;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
 .styled-table {
@@ -64,7 +100,10 @@ const deleteItem = (id) => emit('delete', id);
   border-bottom: 1px solid #f1f5f9;
 }
 
-.product-name { font-weight: 600; color: #1e293b; }
+.product-name {
+  font-weight: 600;
+  color: #1e293b;
+}
 
 .badge {
   padding: 4px 10px;
@@ -73,10 +112,20 @@ const deleteItem = (id) => emit('delete', id);
   font-weight: 500;
 }
 
-.badge.active { background: #dcfce7; color: #166534; }
-.badge.inactive { background: #fee2e2; color: #991b1b; }
+.badge.active {
+  background: #dcfce7;
+  color: #166534;
+}
 
-.actions { display: flex; gap: 10px; }
+.badge.inactive {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+}
 
 .actions button {
   border: none;
@@ -87,6 +136,11 @@ const deleteItem = (id) => emit('delete', id);
   transition: 0.2s;
 }
 
-.btn-edit:hover { background: #dbeafe; }
-.btn-delete:hover { background: #fee2e2; }
+.btn-edit:hover {
+  background: #dbeafe;
+}
+
+.btn-delete:hover {
+  background: #fee2e2;
+}
 </style>
