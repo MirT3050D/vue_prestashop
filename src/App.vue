@@ -16,6 +16,10 @@ elements[1] = {
   label: "Liste",
   url: "/listProduct"
 };
+elements[2] = {
+  label: "Reset",
+  url: "/reset"
+};
 </script>
 
 <template>
@@ -36,8 +40,11 @@ elements[1] = {
       <header class="navbar">
         <div class="navbar-title">Tableau de bord</div>
         <div class="navbar-profile">
-          <span>Admin</span>
-          <div class="avatar"></div>
+            <RouterLink to="/login">
+              <button class="login-button" type="button">Login</button>
+            </RouterLink>
+          <!-- <span>Admin</span>
+          <div class="avatar"></div> -->
         </div>
       </header>
 
@@ -111,6 +118,29 @@ elements[1] = {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.login-button {
+  border: none;
+  border-radius: 12px;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, #0f172a, #2563eb);
+  color: #f8fafc;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.2);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+
+.login-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.28);
+}
+
+.login-button:active {
+  transform: translateY(0);
+  opacity: 0.92;
 }
 
 .avatar {

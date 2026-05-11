@@ -51,12 +51,14 @@ function clickOnDropDown() {
 
 <style scoped>
 .boite {
-    --text: #0f172a;
-    --accent: #2563eb;
+    --text: #e2e8f0;
+    --accent: #38bdf8;
+    background: rgba(15, 23, 42, 0.45);
+    border: 1px solid rgba(148, 163, 184, 0.16);
     color: var(--text);
     border-radius: 14px;
     padding: 18px 20px;
-    box-shadow: 0 8px 20px rgba(37, 99, 235, 0.12);
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.18);
     display: grid;
     grid-template-columns: 1fr auto;
     align-items: center;
@@ -106,6 +108,7 @@ function clickOnDropDown() {
     padding: 10px 12px;
     margin-top: 6px;
     animation: dropdownFade 180ms ease-out;
+    background: rgba(15, 23, 42, 0.58);
 }
 
 .elements ul {
@@ -117,11 +120,13 @@ function clickOnDropDown() {
 .elements li {
     padding: 8px 10px;
     border-radius: 8px;
-    transition: color 160ms ease;
+    color: #e2e8f0;
+    transition: color 160ms ease, background 160ms ease;
 }
 
 .elements li:hover {
-    color: var(--accent);
+    color: #ffffff;
+    background: rgba(56, 189, 248, 0.14);
 }
 
 @keyframes dropdownFade {
