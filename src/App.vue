@@ -1,187 +1,124 @@
 <script setup>
-import Dropdown from "./components/Dropdown.vue";
-import { ref, onMounted } from "vue";
-
-const module = [];
-module[0] = {
-  icon: "gridicons:product",
-  label: "produits"
-};
-
-const elements = [];
-elements[0] = {
-  label: "Create",
-  url: "url"
-};
-elements[1] = {
-  label: "Liste",
-  url: "/listProduct"
-};
-elements[2] = {
-  label: "Import CSV",
-  url: "/import"
-};
-const token = ref("");
-onMounted(() => {
-	token.value = JSON.parse(localStorage.getItem("token"));
-})
+import { RouterView } from 'vue-router';
 </script>
 
 <template>
   <div class="app-layout">
-    <aside class="sidebar">
-      <div class="sidebar-logo">ADMIN SHOP</div>
-      <nav class="sidebar-nav">
-        <Dropdown :dropdown_title="module[0]" :contents="elements"></Dropdown>
-        <RouterLink to="" class="link">
-        </RouterLink>
-        <RouterLink to="/reset">
-            Reset
-        </RouterLink>
-        <RouterLink to=""></RouterLink>
-        <RouterLink to=""></RouterLink>
-      </nav>
-    </aside>
 
-    <div class="main-wrapper">
-      <header class="navbar">
-        <div class="navbar-title">Tableau de bord</div>
-        <div class="navbar-profile" v-if="token == null">
-            <RouterLink to="/login">
-              <button class="login-button" type="button">Login</button>
-            </RouterLink>
-          </div>
-          <div v-else>
-          <span>Admin</span>
-        <div class="avatar"></div>
+    <!-- Navbar horizontale en haut -->
+    <header class="navbar">
+      <div class="navbar-logo">
+        <span class="logo-icon">🛍️</span>
+        <span class="logo-text">MonShop</span>
       </div>
-      </header>
 
-      <main class="content">
-        <RouterView></RouterView>
-      </main>
-    </div>
+      <nav class="navbar-nav">
+        <a href="#" class="nav-item active">🏠 Accueil</a>
+        <!-- Les liens seront ajoutés ici -->
+      </nav>
+
+      <div class="navbar-end">
+        <!-- Espace réservé (profil, login, etc.) -->
+      </div>
+    </header>
+
+    <!-- Contenu principal -->
+    <main class="main-content">
+      <RouterView />
+    </main>
+
   </div>
 </template>
 
 <style scoped>
+/* === LAYOUT === */
 .app-layout {
   display: flex;
-  min-height: 100-screen;
-  background-color: #f4f7f6;
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-}
-
-.sidebar {
-  width: 250px;
-  background-color: #1e293b;
-  color: white;
-  display: flex;
   flex-direction: column;
+  min-height: 100vh;
+  font-family: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: #f8f9fa;
 }
 
-.sidebar-logo {
-  padding: 20px;
-  font-size: 1.5rem;
-  font-weight: bold;
-  text-align: center;
-  background-color: #0f172a;
-}
-
-.sidebar-nav {
-  margin-top: 20px;
-}
-
-.nav-item {
-  display: block;
-  padding: 15px 25px;
-  color: #cbd5e1;
-  text-decoration: none;
-  transition: 0.3s;
-}
-
-.nav-item:hover,
-.nav-item.active {
-  background-color: #334155;
-  color: white;
-  border-left: 4px solid #3b82f6;
-}
-
-.main-wrapper {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
+/* === NAVBAR === */
 .navbar {
-  height: 60px;
-  background: white;
+  position: sticky;
+  top: 0;
+  z-index: 100;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 30px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  padding: 0 36px;
+  height: 64px;
+
+  /* Dégradé doux, en harmonie avec les couleurs de HomeView */
+  background: linear-gradient(110deg, #2f3542 0%, #3d4a5c 55%, #4a5568 100%);
+
+  box-shadow: 0 4px 20px rgba(47, 53, 66, 0.2);
 }
 
-.navbar-profile {
+/* Logo */
+.navbar-logo {
   display: flex;
   align-items: center;
   gap: 10px;
-}
-
-.login-button {
-  border: none;
-  border-radius: 12px;
-  padding: 10px 16px;
-  background: linear-gradient(135deg, #0f172a, #2563eb);
-  color: #f8fafc;
-  font-size: 0.95rem;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.2);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
-}
-
-.login-button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.28);
-}
-
-.login-button:active {
-  transform: translateY(0);
-  opacity: 0.92;
-}
-
-.avatar {
-  width: 35px;
-  height: 35px;
-  background-color: #cbd5e1;
-  border-radius: 50%;
-}
-
-.content {
-  padding: 30px;
-}
-.link
-{
-  color: #f4f7f6;
   text-decoration: none;
 }
-/* Styles for RouterLink elements inside the sidebar and active state */
-.sidebar-nav a {
-  display: block;
-  padding: 15px 25px;
-  color: #cbd5e1;
+
+.logo-icon {
+  font-size: 1.5rem;
+}
+
+.logo-text {
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: #ffffff;
+  letter-spacing: -0.5px;
+}
+
+/* Navigation */
+.navbar-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.65);
   text-decoration: none;
-  transition: 0.3s;
+  font-size: 0.92rem;
+  font-weight: 500;
+  transition: background 0.2s ease, color 0.2s ease;
 }
-.sidebar-nav a:hover {
-  background-color: #334155;
-  color: #fff;
+
+.nav-item:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
 }
-.sidebar-nav a.router-link-active {
-  background-color: #334155;
-  color: #fff;
-  border-left: 4px solid #3b82f6;
+
+.nav-item.active {
+  /* Accent vert doux — même couleur que les prix dans ProductBloc */
+  background: linear-gradient(135deg, rgba(46, 213, 115, 0.18), rgba(46, 213, 115, 0.08));
+  color: #2ed573;
+  font-weight: 600;
+}
+
+/* Fin de la navbar (profil, etc.) */
+.navbar-end {
+  min-width: 80px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* === MAIN CONTENT === */
+.main-content {
+  flex: 1;
+  overflow-y: auto;
+  background-color: #f8f9fa;
 }
 </style>

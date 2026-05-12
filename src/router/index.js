@@ -1,10 +1,11 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import HomeView from '../view/HomeView.vue'
+import HomeView from '../view/frontoffice/HomeView.vue'
 import TestApiGet from '@/components/TestApiGet.vue'
 import ListProduitsView from '@/view/ListProduitsView.vue'
 import ResetView from '@/view/ResetView.vue'
 import LoginView from '@/view/LoginView.vue'
 import ImportView from '@/view/ImportView.vue'
+import FicheProduitView from '@/view/frontoffice/FicheProduitView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -41,21 +42,31 @@ const router = createRouter({
     path: '/login',
     name: 'login',
     component: LoginView
+  },
+  {
+    path: '/',
+    name: 'homeFrontoffice',
+    component: HomeView
+  },
+  {
+    path: '/produit/:id',
+    name: 'ficheProduit',
+    component: FicheProduitView
   }
   ]
 })
 router.beforeEach((to, from, next) => {
-    const isAuthenticated = localStorage.getItem('token') !== null
+  const isAuthenticated = localStorage.getItem('token') !== null
 
-    if (to.meta.requiresAuth && !isAuthenticated) {
-      // Si la page est protégée et qu'on n'est pas connecté -> Retour au login
-      next('/login')
-    } else if (to.path === '/login' && isAuthenticated) {
-      // Si on est déjà connecté et qu'on essaie d'aller sur login -> Dashboard
-      next('/dashboard')
-    } else {
-      // Dans tous les autres cas, on laisse passer
-      next()
-    }
-  })
+  if (to.meta.requiresAuth && !isAuthenticated) {
+    // Si la page est protégée et qu'on n'est pas connecté -> Retour au login
+    next('/login')
+  } else if (to.path === '/login' && isAuthenticated) {
+    // Si on est déjà connecté et qu'on essaie d'aller sur login -> Dashboard
+    next('/dashboard')
+  } else {
+    // Dans tous les autres cas, on laisse passer
+    next()
+  }
+})
 export default router

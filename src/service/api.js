@@ -3,7 +3,7 @@ import { XMLParser } from 'fast-xml-parser';
 import XMLBuilder from 'fast-xml-builder';
 
 const urlBase = import.meta.env.VITE_API_URL;
-const apiKey = '4TL3WHGWM1LYH3QMDN2ZMXLY7IGUXK5N';
+const apiKey = 'WYGXIZI9DU3H577C3JKWY1YWZZGAULFH';
 const basicAuthHeader = `Basic ${btoa(`${apiKey}:`)}`;
 
 export const api = axios.create({
@@ -12,7 +12,7 @@ export const api = axios.create({
   headers: {
     Authorization: basicAuthHeader
   },
-  params: { 
+  params: {
     output_format: 'JSON'
   }
 });
@@ -90,7 +90,7 @@ export async function putXml(url, payload, config) {
     ...withXmlDefaults(config),
     headers: {
       'Content-Type': 'application/xml',
-      
+
       ...(config?.headers || {})
     }
   });
@@ -100,4 +100,14 @@ export async function putXml(url, payload, config) {
 export async function deleteXml(url, config) {
   const response = await api.delete(url, withXmlDefaults(config));
   return parseResponseData(response.data);
+}
+
+export async function getImage(url) {
+  const response = await api.get(url, {
+    responseType: 'blob',
+    headers: {
+      Accept: 'image/*'
+    }
+  });
+  return URL.createObjectURL(response.data);
 }

@@ -10,7 +10,7 @@ export default defineConfig({
     vue(),
     vueDevTools(),
   ],
-  resolve: {  
+  resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url))
     },
@@ -18,7 +18,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api_ps': {
-        target: 'http://localhost:8080/prestashop_edition_classic_version_8.2.6/api',
+        target: 'http://localhost:8081/prestashop_edition_classic_version_8.2.6/api',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api_ps/, '')
       }
