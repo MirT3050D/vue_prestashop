@@ -1,5 +1,6 @@
 <script setup>
 import Dropdown from "./components/Dropdown.vue";
+import { ref, onMounted } from "vue";
 
 const module = [];
 module[0] = {
@@ -17,9 +18,13 @@ elements[1] = {
   url: "/listProduct"
 };
 elements[2] = {
-  label: "Reset",
-  url: "/reset"
+  label: "Import CSV",
+  url: "/import"
 };
+const token = ref("");
+onMounted(() => {
+	token.value = JSON.parse(localStorage.getItem("token"));
+})
 </script>
 
 <template>
@@ -30,7 +35,9 @@ elements[2] = {
         <Dropdown :dropdown_title="module[0]" :contents="elements"></Dropdown>
         <RouterLink to="" class="link">
         </RouterLink>
-        <RouterLink to=""></RouterLink>
+        <RouterLink to="/reset">
+            Reset
+        </RouterLink>
         <RouterLink to=""></RouterLink>
         <RouterLink to=""></RouterLink>
       </nav>
@@ -39,13 +46,15 @@ elements[2] = {
     <div class="main-wrapper">
       <header class="navbar">
         <div class="navbar-title">Tableau de bord</div>
-        <div class="navbar-profile">
+        <div class="navbar-profile" v-if="token == null">
             <RouterLink to="/login">
               <button class="login-button" type="button">Login</button>
             </RouterLink>
-          <!-- <span>Admin</span>
-          <div class="avatar"></div> -->
-        </div>
+          </div>
+          <div v-else>
+          <span>Admin</span>
+        <div class="avatar"></div>
+      </div>
       </header>
 
       <main class="content">
@@ -157,5 +166,22 @@ elements[2] = {
 {
   color: #f4f7f6;
   text-decoration: none;
+}
+/* Styles for RouterLink elements inside the sidebar and active state */
+.sidebar-nav a {
+  display: block;
+  padding: 15px 25px;
+  color: #cbd5e1;
+  text-decoration: none;
+  transition: 0.3s;
+}
+.sidebar-nav a:hover {
+  background-color: #334155;
+  color: #fff;
+}
+.sidebar-nav a.router-link-active {
+  background-color: #334155;
+  color: #fff;
+  border-left: 4px solid #3b82f6;
 }
 </style>

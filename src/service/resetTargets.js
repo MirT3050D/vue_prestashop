@@ -133,14 +133,5 @@ export const resetTargets = [
     itemKey: 'supplier',
     defaultSelected: false,
     skipIds: []
-  },
-  {
-    key: 'alias',
-    label: 'Alias',
-    endpoint: '/alias',
-    collectionKey: 'alias',
-    itemKey: 'alias',
-    defaultSelected: false,
-    skipIds: []
   }
 ];

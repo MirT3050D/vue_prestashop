@@ -4,6 +4,7 @@ import TestApiGet from '@/components/TestApiGet.vue'
 import ListProduitsView from '@/view/ListProduitsView.vue'
 import ResetView from '@/view/ResetView.vue'
 import LoginView from '@/view/LoginView.vue'
+import ImportView from '@/view/ImportView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -21,11 +22,19 @@ const router = createRouter({
   {
     path: '/listProduct', // Une nouvelle adresse pour tes tâches
     name: 'list_product',
+    meta: { requiresAuth: true }, // 🚩 Badge requis
     component: ListProduitsView
+  },
+  {
+    path: '/import',
+    name: 'import',
+    meta: { requiresAuth: true },
+    component: ImportView
   },
   {
     path: '/reset',
     name: 'reset',
+    meta: { requiresAuth: true },
     component: ResetView
   },
   {

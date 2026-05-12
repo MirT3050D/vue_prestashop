@@ -12,6 +12,7 @@
     "@iconify/vue": "^5.0.1",
     "axios": "^1.16.0",
     "fast-xml-parser": "^5.7.3",
+    "papaparse": "^5.5.3",
     "vue": "^3.5.32",
     "vue-router": "^4.6.4"
   },
