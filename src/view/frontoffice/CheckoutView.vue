@@ -212,8 +212,8 @@ async function passerCommande() {
     <id_carrier>1</id_carrier>
     <id_currency>1</id_currency>
     <id_lang>1</id_lang>
-    <module>ps_checkpayment</module>
-    <payment>Paiement par chèque</payment>
+    <module>ps_cashondelivery</module>
+    <payment>Paiement à la livraison</payment>
     <total_paid>${totalPanier.value}</total_paid>
     <total_paid_real>0</total_paid_real>
     <total_products>${totalPanier.value}</total_products>
@@ -324,10 +324,10 @@ async function passerCommande() {
                             Mode de paiement
                         </h3>
                         <div class="payment-option selected">
-                            <Icon icon="lucide:file-text" />
+                            <Icon icon="lucide:truck" />
                             <div>
-                                <strong>Paiement par chèque</strong>
-                                <p>Envoyez votre chèque à l'adresse de la boutique</p>
+                                <strong>Paiement à la livraison</strong>
+                                <p>Payez en espèces lors de la réception de votre commande</p>
                             </div>
                             <Icon icon="lucide:check-circle" class="check-icon" />
                         </div>
@@ -388,7 +388,7 @@ async function passerCommande() {
             </div>
             <h2>Commande confirmée !</h2>
             <p v-if="idOrder">Votre commande <strong>#{{ idOrder }}</strong> a été enregistrée avec succès.</p>
-            <p>Vous recevrez une confirmation dès traitement de votre chèque.</p>
+            <p>Vous recevrez une confirmation par email. Votre commande sera payée lors de la livraison.</p>
             <router-link to="/" class="btn-home">
                 <Icon icon="lucide:home" />
                 Retour à la boutique

@@ -1,31 +1,35 @@
 import { fileURLToPath, URL } from 'node:url'
 
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vueDevTools from 'vite-plugin-vue-devtools'
 
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [
-    vue(),
-    vueDevTools(),
-  ],
-  resolve: {
-    alias: {
-      '@': fileURLToPath(new URL('./src', import.meta.url))
-    },
-  },
-  server: {
-    proxy: {
-      '/api_ps': {
-        target: 'http://localhost:8081/prestashop_edition_classic_version_8.2.6/api',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api_ps/, '')
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd())
+  
+  return {
+    plugins: [
+      vue(),
+      vueDevTools(),
+    ],
+    resolve: {
+      alias: {
+        '@': fileURLToPath(new URL('./src', import.meta.url))
       },
-      '/ps_front': {
-        target: 'http://localhost:8081/prestashop_edition_classic_version_8.2.6',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/ps_front/, '')
+    },
+    server: {
+      proxy: {
+        '/api_ps': {
+          target: `${env.VITE_PRESTASHOP_URL}/api`,
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api_ps/, '')
+        },
+        '/ps_front': {
+          target: env.VITE_PRESTASHOP_URL,
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/ps_front/, '')
+        }
       }
     }
   }

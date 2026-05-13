@@ -3,7 +3,7 @@ import HomeView from '../view/frontoffice/HomeView.vue'
 import TestApiGet from '@/components/TestApiGet.vue'
 import ListProduitsView from '@/view/ListProduitsView.vue'
 import ResetView from '@/view/ResetView.vue'
-import LoginView from '@/view/LoginView.vue'
+import LoginBackView from '@/view/backoffice/LoginBackView.vue'
 import ImportView from '@/view/ImportView.vue'
 import FicheProduitView from '@/view/frontoffice/FicheProduitView.vue'
 import PanierView from '@/view/frontoffice/PanierView.vue'
@@ -16,7 +16,7 @@ const router = createRouter({
     path: '/backofficeDashboard',
     name: 'home',
     component: HomeView,
-    meta: { requiresAuth: true }
+    meta: { requiresAuth: true, isBackoffice: true }
   },
   {
     path: '/test',
@@ -26,25 +26,26 @@ const router = createRouter({
   {
     path: '/listProduct',
     name: 'list_product',
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, isBackoffice: true },
     component: ListProduitsView
   },
   {
     path: '/import',
     name: 'import',
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, isBackoffice: true },
     component: ImportView
   },
   {
     path: '/reset',
     name: 'reset',
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, isBackoffice: true },
     component: ResetView
   },
   {
-    path: '/login',
+    path: '/admin',
     name: 'login',
-    component: LoginView
+    component: LoginBackView,
+    meta: { isBackoffice: true }
   },
   {
     path: '/',
@@ -79,8 +80,8 @@ router.beforeEach((to, from, next) => {
 
   if (to.meta.requiresAuth && !isAuthenticated) {
     next('/login')
-  } else if (to.path === '/login' && isAuthenticated) {
-    next('/dashboard')
+  } else if (to.path === '/admin' && isAuthenticated) {
+    next('/import')
   } else {
     next()
   }

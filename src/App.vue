@@ -1,9 +1,14 @@
 <script setup>
-import { RouterView, RouterLink } from 'vue-router';
+import { useRoute, RouterView, RouterLink } from 'vue-router';
 import { Icon } from '@iconify/vue';
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 
+const route = useRoute();
 const customer = ref(null);
+
+const isBackoffice = computed(() => {
+    return route.meta.isBackoffice === true;
+});
 
 function loadCustomer() {
     let data = localStorage.getItem('customer');
@@ -21,7 +26,11 @@ function loadCustomer() {
 function logout() {
     localStorage.removeItem('customer_token');
     localStorage.removeItem('customer');
+    localStorage.removeItem('token'); // Also remove admin token
     customer.value = null;
+    if (isBackoffice.value) {
+        window.location.href = '/admin'; // Force redirect to login admin
+    }
 }
 
 onMounted(() => {
@@ -36,25 +45,54 @@ window.addEventListener('storage', loadCustomer);
   <div class="app-layout">
 
     <!-- Navbar horizontale en haut -->
-    <header class="navbar">
+    <header class="navbar" :class="{ 'navbar-admin': isBackoffice }">
       <div class="navbar-logo">
-        <Icon icon="lucide:shopping-bag" class="logo-icon" />
-        <span class="logo-text">MonShop</span>
+        <Icon :icon="isBackoffice ? 'lucide:settings' : 'lucide:shopping-bag'" class="logo-icon" />
+        <span class="logo-text">{{ isBackoffice ? 'AdminShop' : 'MonShop' }}</span>
       </div>
 
       <nav class="navbar-nav">
-        <RouterLink to="/" class="nav-item" active-class="active">
-          <Icon icon="lucide:home" />
-          Accueil
-        </RouterLink>
-        <RouterLink to="/panier" class="nav-item" active-class="active">
-          <Icon icon="lucide:shopping-cart" />
-          Panier
-        </RouterLink>
+        <!-- Menu Backoffice -->
+        <template v-if="isBackoffice">
+          <RouterLink to="/backofficeDashboard" class="nav-item" active-class="active">
+            <Icon icon="lucide:layout-dashboard" />
+            Tableau de bord
+          </RouterLink>
+          <RouterLink to="/listProduct" class="nav-item" active-class="active">
+            <Icon icon="lucide:package" />
+            Produits
+          </RouterLink>
+          <RouterLink to="/import" class="nav-item" active-class="active">
+            <Icon icon="lucide:import" />
+            Import
+          </RouterLink>
+          <RouterLink to="/reset" class="nav-item" active-class="active">
+            <Icon icon="lucide:refresh-ccw" />
+            Réinitialisation
+          </RouterLink>
+        </template>
+
+        <!-- Menu Frontoffice -->
+        <template v-else>
+          <RouterLink to="/" class="nav-item" active-class="active">
+            <Icon icon="lucide:home" />
+            Accueil
+          </RouterLink>
+          <RouterLink to="/panier" class="nav-item" active-class="active">
+            <Icon icon="lucide:shopping-cart" />
+            Panier
+          </RouterLink>
+        </template>
       </nav>
 
       <div class="navbar-end">
-        <template v-if="customer">
+        <template v-if="isBackoffice">
+           <button class="nav-item logout-link" @click="logout">
+            <Icon icon="lucide:log-out" />
+            Déconnexion Admin
+          </button>
+        </template>
+        <template v-else-if="customer">
           <span class="user-greeting">
             <Icon icon="lucide:user" />
             {{ customer.firstname || customer.email }}
@@ -64,7 +102,7 @@ window.addEventListener('storage', loadCustomer);
             Déconnexion
           </button>
         </template>
-        <RouterLink v-else to="/connexion" class="nav-item login-link" active-class="active">
+        <RouterLink v-else-if="!isBackoffice" to="/connexion" class="nav-item login-link" active-class="active">
           <Icon icon="lucide:log-in" />
           Connexion
         </RouterLink>
@@ -101,6 +139,11 @@ window.addEventListener('storage', loadCustomer);
   height: 64px;
   background: linear-gradient(110deg, #2f3542 0%, #3d4a5c 55%, #4a5568 100%);
   box-shadow: 0 4px 20px rgba(47, 53, 66, 0.2);
+}
+
+.navbar-admin {
+  background: linear-gradient(110deg, #0f172a 0%, #1e293b 55%, #334155 100%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .navbar-logo {

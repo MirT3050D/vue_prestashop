@@ -3,7 +3,7 @@ import { XMLParser } from 'fast-xml-parser';
 import XMLBuilder from 'fast-xml-builder';
 
 const urlBase = import.meta.env.VITE_API_URL;
-const apiKey = 'WYGXIZI9DU3H577C3JKWY1YWZZGAULFH';
+const apiKey = import.meta.env.VITE_API_KEY;
 const basicAuthHeader = `Basic ${btoa(`${apiKey}:`)}`;
 
 export const api = axios.create({

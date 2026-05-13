@@ -4,7 +4,9 @@ import { Icon } from '@iconify/vue'
 
 const props = defineProps({
     loading: { type: Boolean, default: false },
-    error: { type: String, default: '' }
+    error: { type: String, default: '' },
+    title: { type: String, default: 'Connexion' },
+    subtitle: { type: String, default: 'Veuillez vous connecter' }
 })
 
 const emit = defineEmits(['submit'])
@@ -27,8 +29,8 @@ function handleSubmit() {
             <div class="login-icon-wrapper">
                 <Icon icon="lucide:user-circle" class="login-icon" />
             </div>
-            <h2 class="login-title">Connexion Client</h2>
-            <p class="login-subtitle">Accédez à votre espace personnel</p>
+            <h2 class="login-title">{{ title }}</h2>
+            <p class="login-subtitle">{{ subtitle }}</p>
         </div>
 
         <!-- Message d'erreur -->
@@ -41,15 +43,14 @@ function handleSubmit() {
             <div class="field-group">
                 <label for="login-email" class="field-label">
                     <Icon icon="lucide:mail" class="field-icon" />
-                    Adresse e-mail
+                    Identifiant / E-mail
                 </label>
                 <input
                     id="login-email"
                     v-model="email"
-                    type="email"
-                    placeholder="votre@email.com"
+                    type="text"
+                    placeholder="Votre identifiant"
                     required
-                    autocomplete="email"
                     class="field-input"
                 />
             </div>
