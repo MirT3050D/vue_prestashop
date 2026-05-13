@@ -18,8 +18,12 @@
             {{ object[column] }}
           </td>
           <td v-if="props.showActions" class="actions">
-            <button @click="editItem(object)" class="btn-edit">✏️</button>
-            <button @click="deleteItem(object)" class="btn-delete">🗑️</button>
+            <button @click="editItem(object)" class="btn-edit" title="Modifier">
+              <Icon icon="lucide:edit-2" />
+            </button>
+            <button @click="deleteItem(object)" class="btn-delete" title="Supprimer">
+              <Icon icon="lucide:trash-2" />
+            </button>
           </td>
         </tr>
       </tbody>
@@ -28,6 +32,8 @@
 </template>
 
 <script setup>
+import { Icon } from '@iconify/vue';
+
 const props = defineProps({
   module: {
     type: String,
@@ -134,6 +140,9 @@ const resolveRowKey = (item, rowIndex) => {
   border-radius: 6px;
   cursor: pointer;
   transition: 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .btn-edit:hover {

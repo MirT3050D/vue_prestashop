@@ -21,7 +21,12 @@ export default defineConfig({
         target: 'http://localhost:8081/prestashop_edition_classic_version_8.2.6/api',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api_ps/, '')
+      },
+      '/ps_front': {
+        target: 'http://localhost:8081/prestashop_edition_classic_version_8.2.6',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/ps_front/, '')
       }
     }
   }
-})  
+})
