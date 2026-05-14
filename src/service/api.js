@@ -69,7 +69,36 @@ function withXmlDefaults(config = {}) {
 
 export async function getXml(url, config) {
   const response = await api.get(url, withXmlDefaults(config));
-  return parseResponseData(response.data);
+  const parsed = parseResponseData(response.data);
+
+  if (parsed && typeof parsed === 'object' && parsed.prestashop) {
+    const p = parsed.prestashop;
+    const productsNode = p.products;
+
+    if (productsNode === '' || productsNode === null) {
+      p.products = { product: [] };
+    }
+    else if (typeof productsNode === 'object') {
+      // empty object -> no products
+      if (Object.keys(productsNode).length === 0) {
+        p.products = { product: [] };
+      }
+      else if (!('product' in productsNode)) {
+        // If productsNode itself is an array of products (rare), wrap it
+        if (Array.isArray(productsNode)) {
+          p.products = { product: productsNode };
+        }
+      }
+      else {
+        // Ensure single product object becomes an array
+        if (productsNode.product && !Array.isArray(productsNode.product)) {
+          productsNode.product = [productsNode.product];
+        }
+      }
+    }
+  }
+
+  return parsed;
 }
 
 export async function postXml(url, payload, config) {
