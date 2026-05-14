@@ -1,7 +1,11 @@
 <script setup>
 import { computed, ref } from 'vue';
 import { deleteXml, getXml } from '@/service/api';
-import { resetTargets } from '@/service/resetTargets';
+import { resetTargets as productResetTargets } from '@/service/resetTargets';
+import { resetDeclinaisonTargets } from '@/service/import';
+import { resetOrderTargets } from '@/service/orderImport';
+
+const resetTargets = [...productResetTargets, ...resetDeclinaisonTargets, ...resetOrderTargets];
 
 function getDefaultSelectedKeys() {
   const keys = [];

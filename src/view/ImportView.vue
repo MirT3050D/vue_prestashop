@@ -28,13 +28,15 @@
         </div>
       </div>
 
-      <!-- Card 3: Placeholder 1 -->
-      <div class="upload-card placeholder-card">
-        <h2>3. Import de Clients</h2>
-        <p>En cours de développement...</p>
+      <!-- Card 3: Orders -->
+      <div class="upload-card">
+        <h2>3. Import de Commandes</h2>
+        <p>Format: customer_email, customer_firstname, customer_lastname, product_reference, product_quantity, order_date</p>
         <div class="upload-section">
-          <input type="file" accept=".csv" disabled class="file-input" />
-          <button class="action-btn" disabled>À venir</button>
+          <input type="file" accept=".csv" @change="(e) => onFileChange(e, 'order')" :disabled="isImportingOrder" class="file-input" />
+          <button class="action-btn" @click="startOrderImport" :disabled="!fileOrder || isImportingOrder">
+            {{ isImportingOrder ? 'Import en cours...' : 'Lancer l\'import' }}
+          </button>
         </div>
       </div>
 
@@ -64,11 +66,14 @@
 import { ref } from 'vue';
 import Papa from 'papaparse';
 import { processImport, processVariantImport } from '@/service/import';
+import { processOrderImport } from '@/service/orderImport';
 
 const fileProduct = ref(null);
 const fileVariant = ref(null);
+const fileOrder = ref(null);
 const isImportingProduct = ref(false);
 const isImportingVariant = ref(false);
+const isImportingOrder = ref(false);
 const logs = ref([]);
 
 const addLog = (type, message) => {
@@ -80,6 +85,8 @@ const onFileChange = (event, type) => {
     fileProduct.value = event.target.files[0];
   } else if (type === 'variant') {
     fileVariant.value = event.target.files[0];
+  } else if (type === 'order') {
+    fileOrder.value = event.target.files[0];
   }
 };
 
@@ -123,6 +130,28 @@ const startVariantImport = () => {
     error: (error) => {
       addLog('error', `Erreur de lecture du fichier CSV : ${error.message}`);
       isImportingVariant.value = false;
+    }
+  });
+};
+
+const startOrderImport = () => {
+  if (!fileOrder.value) return;
+  isImportingOrder.value = true;
+  logs.value = [];
+  addLog('info', 'Début de la lecture du fichier CSV Commandes...');
+
+  Papa.parse(fileOrder.value, {
+    header: true,
+    skipEmptyLines: true,
+    complete: async (results) => {
+      const data = results.data;
+      addLog('success', `${data.length} lignes trouvées dans le CSV Commandes. Début de l'import.`);
+      await processOrderImport(data, addLog);
+      isImportingOrder.value = false;
+    },
+    error: (error) => {
+      addLog('error', `Erreur de lecture du fichier CSV : ${error.message}`);
+      isImportingOrder.value = false;
     }
   });
 };
