@@ -58,9 +58,9 @@ window.addEventListener('storage', loadCustomer);
             <Icon icon="lucide:layout-dashboard" />
             Tableau de bord
           </RouterLink>
-          <RouterLink to="/listProduct" class="nav-item" active-class="active">
-            <Icon icon="lucide:package" />
-            Produits
+          <RouterLink to="/orders" class="nav-item" active-class="active">
+            <Icon icon="lucide:shopping-cart" />
+            Commandes
           </RouterLink>
           <RouterLink to="/import" class="nav-item" active-class="active">
             <Icon icon="lucide:import" />
@@ -111,7 +111,7 @@ window.addEventListener('storage', loadCustomer);
 
     <!-- Contenu principal -->
     <main class="main-content">
-      <RouterView @login-success="loadCustomer" />
+      <RouterView />
     </main>
 
   </div>

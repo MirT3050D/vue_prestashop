@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import OrderListView from '@/view/backoffice/OrderListView.vue';import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from '../view/frontoffice/HomeView.vue'
 import TestApiGet from '@/components/TestApiGet.vue'
 import ListProduitsView from '@/view/ListProduitsView.vue'
@@ -23,12 +23,7 @@ const router = createRouter({
     name: 'test',
     component: TestApiGet
   },
-  {
-    path: '/listProduct',
-    name: 'list_product',
-    meta: { requiresAuth: true, isBackoffice: true },
-    component: ListProduitsView
-  },
+
   {
     path: '/import',
     name: 'import',
@@ -40,6 +35,12 @@ const router = createRouter({
     name: 'reset',
     meta: { requiresAuth: true, isBackoffice: true },
     component: ResetView
+  },
+  {
+    path: '/orders',
+    name: 'order_list',
+    meta: { requiresAuth: true, isBackoffice: true },
+    component: OrderListView
   },
   {
     path: '/admin',
@@ -75,16 +76,24 @@ const router = createRouter({
   ]
 })
 
-router.beforeEach((to, from, next) => {
-  const isAuthenticated = localStorage.getItem('token') !== null
 
-  if (to.meta.requiresAuth && !isAuthenticated) {
-    next('/login')
-  } else if (to.path === '/admin' && isAuthenticated) {
-    next('/import')
-  } else {
-    next()
+router.beforeEach((to, from, next) => {
+  const isAuthenticated = !!localStorage.getItem('token');
+
+  // Si la route est pour le back-office et nécessite une authentification
+  if (to.meta.isBackoffice && to.meta.requiresAuth && !isAuthenticated) {
+    // Redirige vers la page de login du back-office
+    next({ name: 'login' });
+  } 
+  // Si l'utilisateur est authentifié et essaie d'aller sur la page de login
+  else if (isAuthenticated && to.name === 'login') {
+    // Redirige vers la première page utile du back-office (ex: import)
+    next({ name: 'import' });
+  } 
+  // Pour toutes les autres situations, laisser passer
+  else {
+    next();
   }
-})
+});
 
 export default router

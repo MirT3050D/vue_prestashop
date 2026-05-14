@@ -1,4 +1,3 @@
-import { processImageImport } from '@/service/imageImport';
 <template>
   <div class="import-page">
     <h1>Import de Données via CSV</h1>

@@ -12,13 +12,27 @@ onMounted(async () => {
         products.value = products.value["prestashop"]["products"]["product"];
         for (let i = 0; i < products.value.length; i++) {
             let product = products.value[i];
-            if (product.id_default_image && product.id_default_image["@_xlink:href"]) {
-                let imageUrl = product.id_default_image["@_xlink:href"];
-                imageUrl = imageUrl.replace("http://localhost:8080/prestashop_edition_classic_version_8.2.6/api", "");
-                imageUrl = imageUrl.replace("?output_format=XML", "");
+            const defaultImg = product.id_default_image;
+            if (defaultImg) {
+                let imageApiUrl = null;
+                
+                if (typeof defaultImg === 'object' && defaultImg["@_xlink:href"]) {
+                    imageApiUrl = defaultImg["@_xlink:href"];
+                    imageApiUrl = imageApiUrl.replace(/http:\/\/localhost:\d+\/prestashop[^/]*\/api/, "");
+                    imageApiUrl = imageApiUrl.replace("?output_format=XML", "");
+                } else {
+                    let imgId = defaultImg;
+                    if (typeof defaultImg === 'object' && defaultImg['#text']) {
+                        imgId = defaultImg['#text'];
+                    }
+                    if (imgId && imgId !== '' && imgId !== '0') {
+                        imageApiUrl = `/images/products/${product.id}/${imgId}`;
+                    }
+                }
 
-                // Utilisation de la nouvelle fonction getImage() au lieu de getXml()
-                products.value[i].image = await getImage(imageUrl);
+                if (imageApiUrl) {
+                    products.value[i].image = await getImage(imageApiUrl);
+                }
             }
         }
         console.log(products);

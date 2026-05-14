@@ -11,6 +11,7 @@ const step = ref('form'); // 'form' | 'confirmation'
 const loading = ref(false);
 const error = ref('');
 const idOrder = ref(null);
+const codStateId = ref(10); // Default fallback for COD
 
 const panier = ref([]);
 const customer = ref(null);
@@ -35,8 +36,40 @@ const totalPanier = computed(() => {
     return total.toFixed(2);
 });
 
+/**
+ * Lookup the order state ID for "Paiement à la livraison" (Cash on Delivery).
+ * Falls back to state 10 if not found.
+ */
+async function findCodStateId() {
+    try {
+        const statesResp = await getXml('/order_states?display=full');
+        const statesNode = statesResp?.prestashop?.order_states?.order_state;
+        if (!statesNode) return;
+        const states = Array.isArray(statesNode) ? statesNode : [statesNode];
+        
+        for (let i = 0; i < states.length; i++) {
+            const langNode = states[i].name?.language;
+            let stateName = '';
+            if (Array.isArray(langNode)) {
+                stateName = (langNode[0]['#text'] || '').toLowerCase();
+            } else if (langNode && typeof langNode === 'object') {
+                stateName = (langNode['#text'] || '').toLowerCase();
+            }
+            if (stateName.includes('livraison') || stateName.includes('cash on delivery') || stateName.includes('cod')) {
+                codStateId.value = states[i].id;
+                return;
+            }
+        }
+    } catch (e) {
+        console.log('Could not fetch order states for COD lookup:', e);
+    }
+}
+
 // ===== Chargement initial =====
 onMounted(async () => {
+    // Fetch COD state ID
+    await findCodStateId();
+
     // Charger panier
     let cartJson = localStorage.getItem('panier');
     if (cartJson) {
@@ -53,6 +86,8 @@ onMounted(async () => {
                         let imgId = p.id_default_image;
                         if (typeof imgId === 'object' && imgId['@_xlink:href']) {
                              imgId = imgId['@_xlink:href'].split('/').pop();
+                        } else if (typeof imgId === 'object' && imgId['#text']) {
+                             imgId = imgId['#text'];
                         }
                         const path = `images/products/${item.id_product}/${imgId}`;
                         item.image = await getImage(path);
@@ -222,7 +257,7 @@ async function passerCommande() {
     <total_shipping_tax_excl>0</total_shipping_tax_excl>
     <total_shipping_tax_incl>0</total_shipping_tax_incl>
     <conversion_rate>1</conversion_rate>
-    <current_state>1</current_state>
+    <current_state>${codStateId.value}</current_state>
   </order>
 </prestashop>`;
 

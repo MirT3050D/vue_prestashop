@@ -108,11 +108,29 @@ onMounted(async () => {
         }
 
         // Récupération de l'image principale
-        if (product.value.id_default_image && product.value.id_default_image["@_xlink:href"]) {
-            let imageApiUrl = product.value.id_default_image["@_xlink:href"];
-            imageApiUrl = imageApiUrl.replace("http://localhost:8081/prestashop_edition_classic_version_8.2.6/api", "");
-            imageApiUrl = imageApiUrl.replace("?output_format=XML", "");
-            imageUrl.value = await getImage(imageApiUrl);
+        const defaultImg = product.value.id_default_image;
+        if (defaultImg) {
+            let imageApiUrl = null;
+            
+            if (typeof defaultImg === 'object' && defaultImg["@_xlink:href"]) {
+                // Case 1: Object with xlink:href (standard PrestaShop format)
+                imageApiUrl = defaultImg["@_xlink:href"];
+                imageApiUrl = imageApiUrl.replace(/http:\/\/localhost:\d+\/prestashop[^/]*\/api/, "");
+                imageApiUrl = imageApiUrl.replace("?output_format=XML", "");
+            } else {
+                // Case 2: Simple ID (number/string) or object with #text
+                let imgId = defaultImg;
+                if (typeof defaultImg === 'object' && defaultImg['#text']) {
+                    imgId = defaultImg['#text'];
+                }
+                if (imgId && imgId !== '' && imgId !== '0') {
+                    imageApiUrl = `/images/products/${product.value.id}/${imgId}`;
+                }
+            }
+            
+            if (imageApiUrl) {
+                imageUrl.value = await getImage(imageApiUrl);
+            }
         }
 
         // Récupération des variantes (combinaisons)
