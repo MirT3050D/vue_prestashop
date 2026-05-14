@@ -140,3 +140,17 @@ export async function getImage(url) {
   });
   return URL.createObjectURL(response.data);
 }
+
+export async function postImage(url, imageFile) {
+  const formData = new FormData();
+  formData.append('image', imageFile);
+
+  const response = await api.post(url, formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+    params: {},
+    responseType: 'text'
+  });
+  return parseResponseData(response.data);
+}

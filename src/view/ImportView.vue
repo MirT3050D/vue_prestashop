@@ -1,3 +1,4 @@
+import { processImageImport } from '@/service/imageImport';
 <template>
   <div class="import-page">
     <h1>Import de Données via CSV</h1>
@@ -40,13 +41,15 @@
         </div>
       </div>
 
-      <!-- Card 4: Placeholder 2 -->
-      <div class="upload-card placeholder-card">
-        <h2>4. Import de Commandes</h2>
-        <p>En cours de développement...</p>
+      <!-- Card 4: Image Import -->
+      <div class="upload-card">
+        <h2>4. Import d'Images</h2>
+        <p>Format: .zip contenant les images (ex: REF123.jpg, REF123_1.png)</p>
         <div class="upload-section">
-          <input type="file" accept=".csv" disabled class="file-input" />
-          <button class="action-btn" disabled>À venir</button>
+          <input type="file" accept=".zip" @change="(e) => onFileChange(e, 'image')" :disabled="isImportingImage" class="file-input" />
+          <button class="action-btn" @click="startImageImport" :disabled="!fileImage || isImportingImage">
+            {{ isImportingImage ? 'Import en cours...' : 'Lancer l\'import' }}
+          </button>
         </div>
       </div>
     </div>
@@ -67,13 +70,16 @@ import { ref } from 'vue';
 import Papa from 'papaparse';
 import { processImport, processVariantImport } from '@/service/import';
 import { processOrderImport } from '@/service/orderImport';
+import { processImageImport } from '@/service/imageImport';
 
 const fileProduct = ref(null);
 const fileVariant = ref(null);
 const fileOrder = ref(null);
+const fileImage = ref(null);
 const isImportingProduct = ref(false);
 const isImportingVariant = ref(false);
 const isImportingOrder = ref(false);
+const isImportingImage = ref(false);
 const logs = ref([]);
 
 const addLog = (type, message) => {
@@ -87,6 +93,8 @@ const onFileChange = (event, type) => {
     fileVariant.value = event.target.files[0];
   } else if (type === 'order') {
     fileOrder.value = event.target.files[0];
+  } else if (type === 'image') {
+    fileImage.value = event.target.files[0];
   }
 };
 
@@ -154,6 +162,14 @@ const startOrderImport = () => {
       isImportingOrder.value = false;
     }
   });
+};
+
+const startImageImport = async () => {
+  if (!fileImage.value) return;
+  isImportingImage.value = true;
+  logs.value = [];
+  await processImageImport(fileImage.value, addLog);
+  isImportingImage.value = false;
 };
 </script>
 
@@ -284,3 +300,4 @@ const startOrderImport = () => {
 .success { color: #4ade80; border-left: 3px solid #4ade80; }
 .error { color: #f87171; font-weight: bold; background-color: rgba(248, 113, 113, 0.1); border-left: 3px solid #f87171; }
 </style>
+
