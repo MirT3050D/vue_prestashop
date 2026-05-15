@@ -17,6 +17,25 @@ export const api = axios.create({
   }
 });
 
+const rawApi = axios.create({
+  baseURL: urlBase,
+  headers: {
+    Authorization: basicAuthHeader
+  }
+});
+
+const rawApiNoAuth = axios.create({
+  baseURL: urlBase
+});
+
+const rawNoBaseAuth = axios.create({
+  headers: {
+    Authorization: basicAuthHeader
+  }
+});
+
+const rawNoBaseNoAuth = axios.create();
+
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: '@_'
@@ -53,22 +72,35 @@ export function buildPrestaXml(payload) {
 }
 
 function withXmlDefaults(config = {}) {
+  const { skipXmlDefaults, skipAuth, skipBaseUrl, skipApiParams, ...rest } = config;
+
   return {
-    ...config,
-    responseType: 'text',
+    ...rest,
+    responseType: rest.responseType || 'text',
     params: {
-      output_format: 'XML',
-      ...(config.params || {})
+      ...(skipXmlDefaults ? {} : { output_format: 'XML' }),
+      ...(rest.params || {})
     },
     headers: {
-      Accept: 'application/xml',
-      ...(config.headers || {})
+      ...(skipXmlDefaults ? {} : { Accept: 'application/xml' }),
+      ...(rest.headers || {})
     }
   };
 }
 
+function getClient(config = {}) {
+  const { skipBaseUrl, skipAuth, skipApiParams } = config;
+
+  if (skipBaseUrl && skipAuth) return rawNoBaseNoAuth;
+  if (skipBaseUrl) return rawNoBaseAuth;
+  if (skipAuth) return rawApiNoAuth;
+  if (skipApiParams) return rawApi;
+  return api;
+}
+
 export async function getXml(url, config) {
-  const response = await api.get(url, withXmlDefaults(config));
+  const client = getClient(config);
+  const response = await client.get(url, withXmlDefaults(config));
   const parsed = parseResponseData(response.data);
 
   if (parsed && typeof parsed === 'object' && parsed.prestashop) {
@@ -101,9 +133,10 @@ export async function getXml(url, config) {
   return parsed;
 }
 
-export async function postXml(url, payload, config) {
+export const postXml = async (url, payload, config) => {
   const body = buildPrestaXml(payload);
-  const response = await api.post(url, body, {
+  const client = getClient(config);
+  const response = await client.post(url, body, {
     ...withXmlDefaults(config),
     headers: {
       'Content-Type': 'application/xml',
@@ -111,11 +144,12 @@ export async function postXml(url, payload, config) {
     }
   });
   return parseResponseData(response.data);
-}
+};
 
 export async function putXml(url, payload, config) {
   const body = buildPrestaXml(payload);
-  const response = await api.put(url, body, {
+  const client = getClient(config);
+  const response = await client.put(url, body, {
     ...withXmlDefaults(config),
     headers: {
       'Content-Type': 'application/xml',
@@ -127,18 +161,26 @@ export async function putXml(url, payload, config) {
 }
 
 export async function deleteXml(url, config) {
-  const response = await api.delete(url, withXmlDefaults(config));
+  const client = getClient(config);
+  const response = await client.delete(url, withXmlDefaults(config));
   return parseResponseData(response.data);
 }
 
 export async function getImage(url) {
-  const response = await api.get(url, {
-    responseType: 'blob',
-    headers: {
-      Accept: 'image/*'
-    }
-  });
-  return URL.createObjectURL(response.data);
+  console.log("image", url);
+  try {
+    // Use the raw client so we do not append output_format on binary image endpoints.
+    const response = await rawApi.get(url, {
+      responseType: 'blob',
+      headers: {
+        Accept: 'image/*'
+      }
+    });
+    return URL.createObjectURL(response.data);
+    
+  } catch (error) {
+    return null;
+  }
 }
 
 export async function postImage(url, imageFile) {
@@ -153,4 +195,5 @@ export async function postImage(url, imageFile) {
     responseType: 'text'
   });
   return parseResponseData(response.data);
+  88
 }

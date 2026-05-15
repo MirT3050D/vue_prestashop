@@ -2,6 +2,7 @@
 import { ref, onMounted, computed } from 'vue';
 import { Icon } from '@iconify/vue';
 import { getXml, postXml, getImage } from '@/service/api';
+import { updateOrderStatusByHistory } from '@/service/orderService';
 import { useRouter } from 'vue-router';
 
 const router = useRouter();
@@ -15,6 +16,19 @@ const codStateId = ref(10); // Default fallback for COD
 
 const panier = ref([]);
 const customer = ref(null);
+
+function extractText(value) {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'object') {
+        if (typeof value['#text'] !== 'undefined') return String(value['#text']);
+        return '';
+    }
+    return String(value);
+}
+
+function normalizeFormText(value) {
+    return extractText(value).trim();
+}
 
 // ===== Formulaire livraison =====
 const form = ref({
@@ -31,7 +45,8 @@ const form = ref({
 const totalPanier = computed(() => {
     let total = 0;
     for (let i = 0; i < panier.value.length; i++) {
-        total = total + (parseFloat(panier.value[i].price) * panier.value[i].quantity);
+        const unitPriceTTC = Math.round(parseFloat(panier.value[i].price) * 1.055 * 100) / 100;
+        total = total + (unitPriceTTC * panier.value[i].quantity);
     }
     return total.toFixed(2);
 });
@@ -42,24 +57,46 @@ const totalPanier = computed(() => {
  */
 async function findCodStateId() {
     try {
+        const configResp = await getXml('/configurations?display=full&filter[name]=[PS_OS_COD_VALIDATION]');
+        const configNode = configResp?.prestashop?.configurations?.configuration;
+        if (configNode) {
+            const config = Array.isArray(configNode) ? configNode[0] : configNode;
+            const configuredStateId = Number(extractText(config?.value));
+            if (configuredStateId > 0) {
+                codStateId.value = configuredStateId;
+                console.log('[checkout] COD state id from configuration:', codStateId.value);
+                return;
+            }
+        }
+
         const statesResp = await getXml('/order_states?display=full');
         const statesNode = statesResp?.prestashop?.order_states?.order_state;
         if (!statesNode) return;
         const states = Array.isArray(statesNode) ? statesNode : [statesNode];
-        
+
         for (let i = 0; i < states.length; i++) {
-            const langNode = states[i].name?.language;
-            let stateName = '';
-            if (Array.isArray(langNode)) {
-                stateName = (langNode[0]['#text'] || '').toLowerCase();
-            } else if (langNode && typeof langNode === 'object') {
-                stateName = (langNode['#text'] || '').toLowerCase();
+            const moduleName = extractText(states[i].module_name).toLowerCase();
+            if (moduleName === 'ps_cashondelivery') {
+                codStateId.value = Number(extractText(states[i].id));
+                console.log('[checkout] COD state id from module_name:', codStateId.value);
+                return;
             }
-            if (stateName.includes('livraison') || stateName.includes('cash on delivery') || stateName.includes('cod')) {
-                codStateId.value = states[i].id;
+
+            const langNode = states[i].name?.language;
+            const langNodes = Array.isArray(langNode) ? langNode : (langNode ? [langNode] : []);
+            const hasCodLabel = langNodes.some((node) => {
+                const name = extractText(node).toLowerCase();
+                return name.includes('cash on delivery') || name.includes('paiement a la livraison') || name.includes('paiement à la livraison') || name.includes('cashondelivery');
+            });
+
+            if (hasCodLabel) {
+                codStateId.value = Number(extractText(states[i].id));
+                console.log('[checkout] COD state id from state label:', codStateId.value);
                 return;
             }
         }
+
+        console.warn('[checkout] COD state id not found in configuration or states. Using fallback:', codStateId.value);
     } catch (e) {
         console.log('Could not fetch order states for COD lookup:', e);
     }
@@ -114,6 +151,8 @@ onMounted(async () => {
     form.value.firstname = customer.value.firstname || '';
     form.value.lastname = customer.value.lastname || '';
 
+
+
     // Tenter de récupérer une adresse existante
     try {
         let adresseData = await getXml(`addresses?display=full&filter[id_customer]=[${customer.value.id}]`);
@@ -138,11 +177,11 @@ onMounted(async () => {
 
 // ===== Validation du formulaire =====
 function validerFormulaire() {
-    if (!form.value.firstname.trim()) return 'Le prénom est requis.';
-    if (!form.value.lastname.trim())  return 'Le nom est requis.';
-    if (!form.value.address1.trim())  return 'L\'adresse est requise.';
-    if (!form.value.postcode.trim())  return 'Le code postal est requis.';
-    if (!form.value.city.trim())      return 'La ville est requise.';
+    if (!normalizeFormText(form.value.firstname)) return 'Le prénom est requis.';
+    if (!normalizeFormText(form.value.lastname))  return 'Le nom est requis.';
+    if (!normalizeFormText(form.value.address1))  return 'L\'adresse est requise.';
+    if (!normalizeFormText(form.value.postcode))  return 'Le code postal est requis.';
+    if (!normalizeFormText(form.value.city))      return 'La ville est requise.';
     return '';
 }
 
@@ -155,6 +194,8 @@ async function passerCommande() {
     error.value = '';
 
     try {
+        console.log('[checkout] COD state id:', codStateId.value);
+        const totalAmount = Number(totalPanier.value || 0).toFixed(6);
         // 1. Créer ou réutiliser une adresse
         let idAdresse = 0;
 
@@ -225,6 +266,7 @@ async function passerCommande() {
 </prestashop>`;
 
         let cartResp = await postXml('carts', cartXml);
+        console.log('[checkout] cart response:', cartResp);
         let idCart = 0;
         if (cartResp && cartResp.prestashop && cartResp.prestashop.cart) {
             idCart = cartResp.prestashop.cart.id || 0;
@@ -237,6 +279,19 @@ async function passerCommande() {
         }
 
         // 3. Créer la commande
+        let orderRowsXml = '';
+        for (let i = 0; i < panier.value.length; i++) {
+            let item = panier.value[i];
+            orderRowsXml += `
+        <order_row>
+          <product_id>${item.id_product}</product_id>
+          <product_attribute_id>${item.id_product_attribute || 0}</product_attribute_id>
+          <product_quantity>${item.quantity}</product_quantity>
+        </order_row>`;
+        }
+
+        const secureKey = Array.from({length: 32}, () => Math.floor(Math.random() * 16).toString(16)).join('');
+
         let orderXml = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
   <order>
@@ -247,23 +302,63 @@ async function passerCommande() {
     <id_carrier>1</id_carrier>
     <id_currency>1</id_currency>
     <id_lang>1</id_lang>
-    <module>ps_cashondelivery</module>
+        <id_shop>1</id_shop>
+        <id_shop_group>1</id_shop_group>
+        <module>ps_cashondelivery</module>
+        <secure_key>${secureKey}</secure_key>
     <payment>Paiement à la livraison</payment>
-    <total_paid>${totalPanier.value}</total_paid>
-    <total_paid_real>0</total_paid_real>
-    <total_products>${totalPanier.value}</total_products>
-    <total_products_wt>${totalPanier.value}</total_products_wt>
-    <total_shipping>0</total_shipping>
-    <total_shipping_tax_excl>0</total_shipping_tax_excl>
-    <total_shipping_tax_incl>0</total_shipping_tax_incl>
-    <conversion_rate>1</conversion_rate>
-    <current_state>${codStateId.value}</current_state>
+        <total_paid>${totalAmount}</total_paid>
+        <total_paid_real>${totalAmount}</total_paid_real>
+        <total_paid_tax_incl>${totalAmount}</total_paid_tax_incl>
+        <total_paid_tax_excl>${totalAmount}</total_paid_tax_excl>
+        <total_products>${totalAmount}</total_products>
+        <total_products_wt>${totalAmount}</total_products_wt>
+        <total_shipping>0.000000</total_shipping>
+        <total_shipping_tax_excl>0.000000</total_shipping_tax_excl>
+        <total_shipping_tax_incl>0.000000</total_shipping_tax_incl>
+        <total_discounts>0.000000</total_discounts>
+        <total_discounts_tax_excl>0.000000</total_discounts_tax_excl>
+        <total_discounts_tax_incl>0.000000</total_discounts_tax_incl>
+        <total_wrapping>0.000000</total_wrapping>
+        <total_wrapping_tax_excl>0.000000</total_wrapping_tax_excl>
+        <total_wrapping_tax_incl>0.000000</total_wrapping_tax_incl>
+        <conversion_rate>1.000000</conversion_rate>
+        <current_state>${codStateId.value}</current_state>
+        <associations>
+            <order_rows>${orderRowsXml}
+            </order_rows>
+        </associations>
   </order>
 </prestashop>`;
 
+        console.log('[checkout] order payload:', orderXml);
         let orderResp = await postXml('orders', orderXml);
+        console.log('[checkout] order response:', orderResp);
         if (orderResp && orderResp.prestashop && orderResp.prestashop.order) {
-            idOrder.value = orderResp.prestashop.order.id || '?';
+            idOrder.value = extractText(orderResp.prestashop.order.id) || '?';
+            const responseState = Number(extractText(orderResp.prestashop.order.current_state));
+            console.log('[checkout] state returned by order create:', responseState || '(missing)');
+        }
+
+        if (idOrder.value && idOrder.value !== '?') {
+            const freshOrderResp = await getXml(`/orders/${idOrder.value}?display=full`);
+            const freshOrder = freshOrderResp?.prestashop?.order;
+            const currentStateAfterCreate = Number(extractText(freshOrder?.current_state));
+            console.log('[checkout] current_state after order reload:', currentStateAfterCreate || '(missing)');
+
+            if (currentStateAfterCreate && currentStateAfterCreate !== Number(codStateId.value)) {
+                console.warn('[checkout] Unexpected state after creation. Forcing COD state.', {
+                    expected: Number(codStateId.value),
+                    actual: currentStateAfterCreate,
+                    orderId: idOrder.value
+                });
+
+                await updateOrderStatusByHistory(String(idOrder.value), String(codStateId.value));
+
+                const updatedOrderResp = await getXml(`/orders/${idOrder.value}?display=full`);
+                const updatedState = Number(extractText(updatedOrderResp?.prestashop?.order?.current_state));
+                console.log('[checkout] current_state after forced update:', updatedState || '(missing)');
+            }
         }
 
         // 4. Vider le panier local et afficher la confirmation
@@ -271,7 +366,7 @@ async function passerCommande() {
         step.value = 'confirmation';
 
     } catch (err) {
-        console.error(err);
+        console.error('[checkout] order flow error:', err?.response?.data || err);
         error.value = 'Une erreur est survenue lors de la commande. Veuillez réessayer.';
     } finally {
         loading.value = false;
@@ -396,7 +491,7 @@ async function passerCommande() {
                             <span class="summary-item-qty">x{{ item.quantity }}</span>
                         </div>
                         <span class="summary-item-price">
-                            {{ (parseFloat(item.price) * item.quantity).toFixed(2) }} €
+                            {{ (Math.round(parseFloat(item.price) * 1.055 * 100) / 100 * item.quantity).toFixed(2) }} €
                         </span>
                     </div>
                 </div>

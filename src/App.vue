@@ -1,7 +1,7 @@
 <script setup>
 import { useRoute, RouterView, RouterLink } from 'vue-router';
 import { Icon } from '@iconify/vue';
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
 
 const route = useRoute();
 const customer = ref(null);
@@ -28,17 +28,26 @@ function logout() {
     localStorage.removeItem('customer');
     localStorage.removeItem('token'); // Also remove admin token
     customer.value = null;
+  window.dispatchEvent(new Event('customer-updated'));
     if (isBackoffice.value) {
         window.location.href = '/admin'; // Force redirect to login admin
     }
 }
 
+function handleCustomerUpdate() {
+  loadCustomer();
+}
+
 onMounted(() => {
     loadCustomer();
+  window.addEventListener('storage', loadCustomer);
+  window.addEventListener('customer-updated', handleCustomerUpdate);
 });
 
-// Écouter les changements de localStorage (pour mise à jour après login)
-window.addEventListener('storage', loadCustomer);
+onBeforeUnmount(() => {
+  window.removeEventListener('storage', loadCustomer);
+  window.removeEventListener('customer-updated', handleCustomerUpdate);
+});
 </script>
 
 <template>
@@ -77,6 +86,10 @@ window.addEventListener('storage', loadCustomer);
           <RouterLink to="/" class="nav-item" active-class="active">
             <Icon icon="lucide:home" />
             Accueil
+          </RouterLink>
+          <RouterLink to="/mes-commandes" class="nav-item" active-class="active">
+            <Icon icon="lucide:receipt-text" />
+            Mes commandes
           </RouterLink>
           <RouterLink to="/panier" class="nav-item" active-class="active">
             <Icon icon="lucide:shopping-cart" />

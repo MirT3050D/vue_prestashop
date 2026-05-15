@@ -2,8 +2,7 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import LoginForm from '@/components/LoginForm.vue';
-import axios from 'axios';
-import { getXml } from '@/service/api';
+import { getXml, postXml } from '@/service/api';
 
 const emit = defineEmits(['login-success']);
 const router = useRouter();
@@ -21,18 +20,24 @@ async function handleLogin(credentials) {
         formData.append('password', credentials.password);
         formData.append('submitLogin', '1');
 
-        const loginResponse = await axios.post(
+        const loginResponse = await postXml(
             '/ps_front/index.php?controller=authentication',
             formData.toString(),
             {
+                skipXmlDefaults: true,
+                skipAuth: true,
+                skipBaseUrl: true,
+                skipApiParams: true,
                 headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded'
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    Accept: 'text/html'
                 },
                 // On suit les redirections mais on veut la réponse complète
                 maxRedirects: 5,
                 validateStatus: function (status) {
                     return status >= 200 && status < 400;
-                }
+                },
+                params: {}
             }
         );
 
@@ -98,6 +103,7 @@ async function handleLogin(credentials) {
         const token = 'customer_' + Date.now() + '_' + Math.random().toString(36).substring(2);
         localStorage.setItem('customer_token', JSON.stringify(token));
         localStorage.setItem('customer', JSON.stringify(customerData));
+        window.dispatchEvent(new Event('customer-updated'));
 
         // 5. Émettre l'événement de succès
         emit('login-success');

@@ -45,8 +45,8 @@
             </td>
             <td>
               <select @change="onStatusChange(order.id, $event.target.value)" class="status-select" :disabled="isUpdating[order.id]">
-                <option :value="order.current_state" disabled selected>-- Changer --</option>
-                <option v-for="state in targetStates" :key="state.id" :value="state.id">
+                <option disabled selected>-- Changer --</option>
+                <option v-for="state in targetStates" :key="normalizeId(state.id)" :value="normalizeId(state.id)">
                   {{ getStatusName(state.id) }}
                 </option>
               </select>
@@ -74,6 +74,11 @@ const error = ref(null);
 const stateNameMapping = ref(new Map());
 const stateColorMapping = ref(new Map());
 
+function normalizeId(id) {
+  if (id && typeof id === 'object') return String(id['#text'] ?? id);
+  return String(id ?? '');
+}
+
 // States we want to be able to switch to
 const TARGET_STATE_NAMES = ['paiement accepté', 'annulé'];
 
@@ -84,6 +89,9 @@ async function fetchData() {
     const [ordersData, statesData] = await Promise.all([getOrders(), getOrderStates()]);
     
     orders.value = ordersData.sort((a, b) => b.id - a.id); // Sort by most recent
+    console.log('ordersData (raw):', ordersData);
+    console.log('orders (sorted):', orders.value);
+    ordersData.forEach(o => console.log('order:', o.id, 'current_state:', o.current_state, 'type:', typeof o.current_state, o.current_state));
     orderStates.value = statesData;
 
     // Create mappings for quick lookup
@@ -99,13 +107,19 @@ async function fetchData() {
         stateText = langNode;
       }
       const stateName = stateText.toLowerCase();
-      stateNameMapping.value.set(String(state.id), stateText);
-      stateColorMapping.value.set(String(state.id), state.color);
+      const idKey = normalizeId(state.id);
+      stateNameMapping.value.set(idKey, stateText);
+      stateColorMapping.value.set(idKey, state.color);
       
       if (TARGET_STATE_NAMES.includes(stateName)) {
         targetStates.value.push(state);
       }
+      console.log('state parsed:', { id: state.id, idKey, name: stateText, nameLower: stateName, color: state.color });
     });
+
+    console.log('stateNameMapping entries:', Array.from(stateNameMapping.value.entries()));
+    console.log('stateColorMapping entries:', Array.from(stateColorMapping.value.entries()));
+    console.log('targetStates:', targetStates.value);
 
   } catch (e) {
     error.value = e.message;
@@ -115,12 +129,14 @@ async function fetchData() {
 }
 
 function getStatusName(stateId) {
-  return stateNameMapping.value.get(String(stateId)) || 'Inconnu';
+  const idKey = normalizeId(stateId);
+  return stateNameMapping.value.get(idKey) || 'Inconnu';
 }
 
 function getStatusColor(stateId) {
-    const color = stateColorMapping.value.get(String(stateId));
-    return color || '#cccccc';
+  const idKey = normalizeId(stateId);
+  const color = stateColorMapping.value.get(idKey);
+  return color || '#cccccc';
 }
 
 async function onStatusChange(orderId, newStateId) {

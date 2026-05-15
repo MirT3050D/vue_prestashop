@@ -9,10 +9,7 @@
         <h2>1. Import de Produits</h2>
         <p>Format: reference, nom, prix_ttc, Taxe, categorie</p>
         <div class="upload-section">
-          <input type="file" accept=".csv" @change="(e) => onFileChange(e, 'product')" :disabled="isImportingProduct" class="file-input" />
-          <button class="action-btn" @click="startProductImport" :disabled="!fileProduct || isImportingProduct">
-            {{ isImportingProduct ? 'Import en cours...' : 'Lancer l\'import' }}
-          </button>
+          <input type="file" accept=".csv" @change="(e) => onFileChange(e, 'product')" :disabled="isImportingAll" class="file-input" />
         </div>
       </div>
 
@@ -21,10 +18,7 @@
         <h2>2. Import de Variations</h2>
         <p>Format: reference, specificité, karazany, stock_initial, prix_vente_ttc, Taxe</p>
         <div class="upload-section">
-          <input type="file" accept=".csv" @change="(e) => onFileChange(e, 'variant')" :disabled="isImportingVariant" class="file-input" />
-          <button class="action-btn" @click="startVariantImport" :disabled="!fileVariant || isImportingVariant">
-            {{ isImportingVariant ? 'Import en cours...' : 'Lancer l\'import' }}
-          </button>
+          <input type="file" accept=".csv" @change="(e) => onFileChange(e, 'variant')" :disabled="isImportingAll" class="file-input" />
         </div>
       </div>
 
@@ -33,10 +27,7 @@
         <h2>3. Import de Commandes</h2>
         <p>Format: customer_email, customer_firstname, customer_lastname, product_reference, product_quantity, order_date</p>
         <div class="upload-section">
-          <input type="file" accept=".csv" @change="(e) => onFileChange(e, 'order')" :disabled="isImportingOrder" class="file-input" />
-          <button class="action-btn" @click="startOrderImport" :disabled="!fileOrder || isImportingOrder">
-            {{ isImportingOrder ? 'Import en cours...' : 'Lancer l\'import' }}
-          </button>
+          <input type="file" accept=".csv" @change="(e) => onFileChange(e, 'order')" :disabled="isImportingAll" class="file-input" />
         </div>
       </div>
 
@@ -45,12 +36,15 @@
         <h2>4. Import d'Images</h2>
         <p>Format: .zip contenant les images (ex: REF123.jpg, REF123_1.png)</p>
         <div class="upload-section">
-          <input type="file" accept=".zip" @change="(e) => onFileChange(e, 'image')" :disabled="isImportingImage" class="file-input" />
-          <button class="action-btn" @click="startImageImport" :disabled="!fileImage || isImportingImage">
-            {{ isImportingImage ? 'Import en cours...' : 'Lancer l\'import' }}
-          </button>
+          <input type="file" accept=".zip" @change="(e) => onFileChange(e, 'image')" :disabled="isImportingAll" class="file-input" />
         </div>
       </div>
+    </div>
+
+    <div class="controls" style="margin-top:20px;">
+      <button class="action-btn" @click="startAllImports" :disabled="isImportingAll">
+        {{ isImportingAll ? 'Import global en cours...' : 'Lancer l\'import (produit → déclinaison → commande → image)' }}
+      </button>
     </div>
 
     <div v-if="logs.length" class="logs-section">
@@ -79,6 +73,7 @@ const isImportingProduct = ref(false);
 const isImportingVariant = ref(false);
 const isImportingOrder = ref(false);
 const isImportingImage = ref(false);
+const isImportingAll = ref(false);
 const logs = ref([]);
 
 const addLog = (type, message) => {
@@ -97,78 +92,66 @@ const onFileChange = (event, type) => {
   }
 };
 
-const startProductImport = () => {
-  if (!fileProduct.value) return;
-  isImportingProduct.value = true;
-  logs.value = [];
-  addLog('info', 'Début de la lecture du fichier CSV Produits...');
+function parseCsvFile(file) {
+  return new Promise((resolve, reject) => {
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => resolve(results.data),
+      error: (err) => reject(err)
+    });
+  });
+}
 
-  Papa.parse(fileProduct.value, {
-    header: true,
-    skipEmptyLines: true,
-    complete: async (results) => {
-      const data = results.data;
+const startAllImports = async () => {
+  isImportingAll.value = true;
+  logs.value = [];
+
+  try {
+    // 1. Produit
+    if (fileProduct.value) {
+      addLog('info', 'Lecture CSV Produits...');
+      const data = await parseCsvFile(fileProduct.value);
       addLog('success', `${data.length} lignes trouvées dans le CSV Produits. Début de l'import.`);
       await processImport(data, addLog);
-      isImportingProduct.value = false;
-    },
-    error: (error) => {
-      addLog('error', `Erreur de lecture du fichier CSV : ${error.message}`);
-      isImportingProduct.value = false;
+    } else {
+      addLog('info', 'Pas de fichier Produits fourni — ignoré.');
     }
-  });
-};
 
-const startVariantImport = () => {
-  if (!fileVariant.value) return;
-  isImportingVariant.value = true;
-  logs.value = [];
-  addLog('info', 'Début de la lecture du fichier CSV Variations...');
-
-  Papa.parse(fileVariant.value, {
-    header: true,
-    skipEmptyLines: true,
-    complete: async (results) => {
-      const data = results.data;
+    // 2. Déclinaison (Variations)
+    if (fileVariant.value) {
+      addLog('info', 'Lecture CSV Variations...');
+      const data = await parseCsvFile(fileVariant.value);
       addLog('success', `${data.length} lignes trouvées dans le CSV Variations. Début de l'import.`);
       await processVariantImport(data, addLog);
-      isImportingVariant.value = false;
-    },
-    error: (error) => {
-      addLog('error', `Erreur de lecture du fichier CSV : ${error.message}`);
-      isImportingVariant.value = false;
+    } else {
+      addLog('info', 'Pas de fichier Variations fourni — ignoré.');
     }
-  });
-};
 
-const startOrderImport = () => {
-  if (!fileOrder.value) return;
-  isImportingOrder.value = true;
-  logs.value = [];
-  addLog('info', 'Début de la lecture du fichier CSV Commandes...');
-
-  Papa.parse(fileOrder.value, {
-    header: true,
-    skipEmptyLines: true,
-    complete: async (results) => {
-      const data = results.data;
+    // 3. Commande
+    if (fileOrder.value) {
+      addLog('info', 'Lecture CSV Commandes...');
+      const data = await parseCsvFile(fileOrder.value);
       addLog('success', `${data.length} lignes trouvées dans le CSV Commandes. Début de l'import.`);
       await processOrderImport(data, addLog);
-      isImportingOrder.value = false;
-    },
-    error: (error) => {
-      addLog('error', `Erreur de lecture du fichier CSV : ${error.message}`);
-      isImportingOrder.value = false;
+    } else {
+      addLog('info', 'Pas de fichier Commandes fourni — ignoré.');
     }
-  });
-};
 
-const startImageImport = async () => {
-  if (!fileImage.value) return;
-  isImportingImage.value = true;
-  logs.value = [];
-  await processImageImport(fileImage.value, addLog);
-  isImportingImage.value = false;
+    // 4. Image (zip)
+    if (fileImage.value) {
+      addLog('info', 'Import Images (zip) — début...');
+      await processImageImport(fileImage.value, addLog);
+    } else {
+      addLog('info', 'Pas de fichier Images fourni — ignoré.');
+    }
+
+    addLog('success', 'Import global terminé.');
+  } catch (e) {
+    addLog('error', `Erreur lors de l'import global : ${e.message}`);
+  } finally {
+    isImportingAll.value = false;
+  }
 };
 </script>
 

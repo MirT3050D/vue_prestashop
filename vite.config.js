@@ -28,7 +28,26 @@ export default defineConfig(({ mode }) => {
         '/ps_front': {
           target: env.VITE_PRESTASHOP_URL,
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/ps_front/, '')
+          rewrite: (path) => path.replace(/^\/ps_front/, ''),
+          configure: (proxy) => {
+            proxy.on('proxyRes', (proxyRes) => {
+              const location = proxyRes.headers.location;
+
+              if (!location) return;
+
+              if (location.startsWith(env.VITE_PRESTASHOP_URL)) {
+                proxyRes.headers.location = location.replace(
+                  env.VITE_PRESTASHOP_URL,
+                  '/ps_front'
+                );
+                return;
+              }
+
+              if (location.startsWith('/')) {
+                proxyRes.headers.location = `/ps_front${location}`;
+              }
+            });
+          }
         }
       }
     }

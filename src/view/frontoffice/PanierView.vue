@@ -10,6 +10,8 @@ const panier = ref([]);
 const loading = ref(false);
 const message = ref('');
 const messageType = ref(''); // 'success' ou 'error'
+const codStateId = ref(10); // Fallback if COD state not found
+const secureKey = ref('');
 
 // ========== Panier localStorage ==========
 
@@ -49,15 +51,42 @@ async function loadCart() {
 }
 
 onMounted(() => {
+    findCodStateId();
     loadCart();
 });
+
+async function findCodStateId() {
+    try {
+        const statesResp = await getXml('/order_states?display=full');
+        const statesNode = statesResp?.prestashop?.order_states?.order_state;
+        if (!statesNode) return;
+        const states = Array.isArray(statesNode) ? statesNode : [statesNode];
+
+        for (let i = 0; i < states.length; i++) {
+            const langNode = states[i].name?.language;
+            let stateName = '';
+            if (Array.isArray(langNode)) {
+                stateName = (langNode[0]['#text'] || '').toLowerCase();
+            } else if (langNode && typeof langNode === 'object') {
+                stateName = (langNode['#text'] || '').toLowerCase();
+            }
+            if (stateName.includes('livraison') || stateName.includes('cash on delivery') || stateName.includes('cod')) {
+                codStateId.value = states[i].id;
+                return;
+            }
+        }
+    } catch (e) {
+        console.log('Could not fetch order states for COD lookup:', e);
+    }
+}
 
 // Calcul du total du panier avec une boucle simple
 const totalPanier = computed(() => {
     let total = 0;
     for (let i = 0; i < panier.value.length; i++) {
         let item = panier.value[i];
-        total = total + (parseFloat(item.price) * item.quantity);
+        const unitPriceTTC = Math.round(parseFloat(item.price) * 1.055 * 100) / 100;
+        total = total + (unitPriceTTC * item.quantity);
     }
     return total.toFixed(2);
 });
@@ -105,6 +134,13 @@ async function passerCommande() {
         message.value = 'Informations client incomplètes. Veuillez vous reconnecter.';
         messageType.value = 'error';
         return;
+    }
+
+    try {
+        const customerResp = await getXml(`customers/${customer.id}?display=[secure_key]`);
+        secureKey.value = customerResp?.prestashop?.customer?.secure_key?.['#text'] || customerResp?.prestashop?.customer?.secure_key || '';
+    } catch (e) {
+        console.warn('Impossible de charger secure_key client:', e);
     }
 
     loading.value = true;
@@ -185,6 +221,7 @@ async function passerCommande() {
 
         // 5. Créer la commande PrestaShop
         // id_carrier = 1 (transporteur par défaut), id_payment = "free" pour les tests
+                const totalAmount = Number(totalPanier.value || 0).toFixed(6);
         let orderXml = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
   <order>
@@ -195,17 +232,30 @@ async function passerCommande() {
     <id_carrier>1</id_carrier>
     <id_currency>1</id_currency>
     <id_lang>1</id_lang>
+        <id_shop>1</id_shop>
+        <id_shop_group>1</id_shop_group>
     <module>ps_checkpayment</module>
-    <payment>Paiement par chèque</payment>
-    <total_paid>${totalPanier.value}</total_paid>
-    <total_paid_real>0</total_paid_real>
-    <total_products>${totalPanier.value}</total_products>
-    <total_products_wt>${totalPanier.value}</total_products_wt>
-    <total_shipping>0</total_shipping>
-    <total_shipping_tax_excl>0</total_shipping_tax_excl>
-    <total_shipping_tax_incl>0</total_shipping_tax_incl>
-    <conversion_rate>1</conversion_rate>
-    <current_state>1</current_state>
+    <payment>Paiement à la livraison</payment>
+        <secure_key>${secureKey.value}</secure_key>
+        <total_paid>${totalAmount}</total_paid>
+        <total_paid_real>0.000000</total_paid_real>
+        <total_paid_tax_incl>${totalAmount}</total_paid_tax_incl>
+        <total_paid_tax_excl>${totalAmount}</total_paid_tax_excl>
+        <total_products>${totalAmount}</total_products>
+        <total_products_wt>${totalAmount}</total_products_wt>
+        <total_products_tax_incl>${totalAmount}</total_products_tax_incl>
+        <total_products_tax_excl>${totalAmount}</total_products_tax_excl>
+        <total_shipping>0.000000</total_shipping>
+        <total_shipping_tax_excl>0.000000</total_shipping_tax_excl>
+        <total_shipping_tax_incl>0.000000</total_shipping_tax_incl>
+        <total_discounts>0.000000</total_discounts>
+        <total_discounts_tax_excl>0.000000</total_discounts_tax_excl>
+        <total_discounts_tax_incl>0.000000</total_discounts_tax_incl>
+        <total_wrapping>0.000000</total_wrapping>
+        <total_wrapping_tax_excl>0.000000</total_wrapping_tax_excl>
+        <total_wrapping_tax_incl>0.000000</total_wrapping_tax_incl>
+        <conversion_rate>1.000000</conversion_rate>
+        <current_state>${codStateId.value}</current_state>
   </order>
 </prestashop>`;
 
@@ -260,7 +310,7 @@ async function passerCommande() {
                         v-for="(item, index) in panier" 
                         :key="index"
                         :nom="item.name"
-                        :prix="item.price"
+                        :prix="Math.round(item.price * 1.055 * 100) / 100"
                         :quantite="item.quantity"
                         :image="item.image"
                         @update:quantite="(newQty) => updateQuantity(index, newQty)"

@@ -1,5 +1,5 @@
 
-import { getXml, putXml } from '@/service/api';
+import { getXml, postXml } from '@/service/api';
 
 /**
  * Fetches all orders from the PrestaShop API.
@@ -9,6 +9,25 @@ export async function getOrders() {
     if (!response?.prestashop?.orders?.order) {
         return [];
     }
+    let orders = response.prestashop.orders.order;
+    return Array.isArray(orders) ? orders : [orders];
+}
+
+/**
+ * Fetches the orders for one customer.
+ *
+ * @param {string|number} customerId The customer identifier.
+ */
+export async function getCustomerOrders(customerId) {
+    if (!customerId) {
+        return [];
+    }
+
+    const response = await getXml(`/orders?display=full&filter[id_customer]=[${customerId}]`);
+    if (!response?.prestashop?.orders?.order) {
+        return [];
+    }
+
     let orders = response.prestashop.orders.order;
     return Array.isArray(orders) ? orders : [orders];
 }
@@ -26,37 +45,32 @@ export async function getOrderStates() {
 }
 
 /**
- * Updates the status of a specific order.
- * PrestaShop requires the full order resource for PUT requests.
- * We fetch the complete order, update current_state, and send back.
- * 
+ * Updates order status using order history creation.
+ * This is the native PrestaShop workflow and avoids full order PUT issues.
+ *
  * @param {string} orderId The ID of the order to update.
- * @param {string} newStateId The ID of the new order state.
+ * @param {string} newStateId The target order state ID.
  */
 export async function updateOrderStatus(orderId, newStateId) {
-    // 1. Get the existing full order data
-    const orderData = await getXml(`/orders/${orderId}`);
-    const order = orderData?.prestashop?.order;
-    
-    if (!order) {
-        throw new Error(`Commande ${orderId} introuvable.`);
-    }
+    const payload = `<?xml version="1.0" encoding="UTF-8"?>
+<prestashop>
+    <order_history>
+        <id_order>${orderId}</id_order>
+        <id_order_state>${newStateId}</id_order_state>
+    </order_history>
+</prestashop>`;
 
-    // 2. Update the current_state
-    order.current_state = newStateId;
-    
-    // 3. Clean up read-only / problematic fields that PrestaShop rejects on PUT
-    delete order.associations;
-    delete order.id_shop;
-    delete order.id_shop_group;
+    return await postXml('/order_histories', payload);
+}
 
-    // 4. Send the PUT request with the full order payload
-    const updatePayload = {
-        prestashop: {
-            order: order
-        }
-    };
-    
-    return await putXml(`/orders/${orderId}`, updatePayload);
+/**
+ * Updates order status using order history creation.
+ * This is the native PrestaShop workflow and avoids full order PUT issues.
+ *
+ * @param {string} orderId The ID of the order to update.
+ * @param {string} newStateId The target order state ID.
+ */
+export async function updateOrderStatusByHistory(orderId, newStateId) {
+    return await updateOrderStatus(orderId, newStateId);
 }
 

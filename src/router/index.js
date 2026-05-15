@@ -2,13 +2,14 @@ import OrderListView from '@/view/backoffice/OrderListView.vue';import { createR
 import HomeView from '../view/frontoffice/HomeView.vue'
 import TestApiGet from '@/components/TestApiGet.vue'
 import ListProduitsView from '@/view/ListProduitsView.vue'
-import ResetView from '@/view/ResetView.vue'
+import ResetView from '@/view/backoffice/ResetView.vue'
 import LoginBackView from '@/view/backoffice/LoginBackView.vue'
-import ImportView from '@/view/ImportView.vue'
+import ImportView from '@/view/backoffice/ImportView.vue'
 import FicheProduitView from '@/view/frontoffice/FicheProduitView.vue'
 import PanierView from '@/view/frontoffice/PanierView.vue'
 import LoginFrontView from '@/view/frontoffice/LoginFrontView.vue'
 import CheckoutView from '@/view/frontoffice/CheckoutView.vue'
+import OrdersView from '@/view/frontoffice/OrdersView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -72,6 +73,11 @@ const router = createRouter({
     path: '/checkout',
     name: 'checkout',
     component: CheckoutView
+  },
+  {
+    path: '/mes-commandes',
+    name: 'mes_commandes',
+    component: OrdersView
   }
   ]
 })

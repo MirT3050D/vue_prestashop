@@ -1,0 +1,43 @@
+HTTP/1.1 200 OK
+Date: Fri, 15 May 2026 15:59:14 GMT
+Server: Apache/2.4.65 (Debian)
+X-Powered-By: PHP/8.1.34
+Set-Cookie: PrestaShop-0961f0c0f176c9bff8cefd3306950222=def5020001499664607b831c2259185a1ce375b8460a6a58bbf9effa8c7bf9e348eac0c1ca4a711b2731197ec476862f2a0aae191223ecda0d57bc393c62498e4df053b69361517dbe77029789140734ceb41f4983185e5104524e85f5b6dfc294fe285fd158d1e3c68fe02e27c1d2815425b93b932769c883e2d14c21a1187936660d72aa0295368aa27ee701da3e276e9dab51db11b0e6fd1898b52c94b8a7cb0327bf9f114ea0d74417e66bfd3a08e48a9a87bb91cd96e42d27eb0df119cfb49a80b5ac6a; expires=Thu, 04-Jun-2026 15:59:14 GMT; Max-Age=1728000; path=/prestashop_edition_classic_version_8.2.6/; HttpOnly; SameSite=Lax
+Vary: Accept-Encoding
+Content-Length: 4393
+Content-Type: text/html; charset=utf-8
+
+
+Fatal error: Uncaught PDOException: SQLSTATE[23000]: Integrity constraint violation: 1048 Column 'secure_key' cannot be null in /var/www/html/prestashop_edition_classic_version_8.2.6/classes/db/DbPDO.php:151
+Stack trace:
+#0 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/db/DbPDO.php(151): PDO->query('INSERT INTO `ps...')
+#1 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/db/Db.php(377): DbPDOCore->_query('INSERT INTO `ps...')
+#2 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/db/Db.php(744): DbCore->query('INSERT INTO `ps...')
+#3 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/db/Db.php(477): DbCore->q('INSERT INTO `ps...', true)
+#4 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/ObjectModel.php(622): DbCore->insert('ps_orders', Array, true)
+#5 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/order/Order.php(311): ObjectModelCore->add(true, true)
+#6 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/PaymentModule.php(1083): OrderCore->add()
+#7 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/PaymentModule.php(354): PaymentModuleCore->createOrderFromCart(Object(Cart), Object(Currency), Array, 13, Object(Context), 'WEDHSIGRD', NULL, 'Paiement \xC3\xA0 la ...', 'ps_cashondelive...', false, 9.47, 0, 10.0, false, Object(OrderState), '8', 1)
+#8 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/order/Order.php(1800): PaymentModuleCore->validateOrder('27', '8', '9.470000', 'Paiement \xC3\xA0 la ...', NULL, Array, NULL, false, NULL)
+#9 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/webservice/WebserviceRequest.php(1671): OrderCore->addWs()
+#10 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/webservice/WebserviceRequest.php(1446): WebserviceRequestCore->saveEntityFromXml(201)
+#11 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/webservice/WebserviceRequest.php(582): WebserviceRequestCore->executeEntityPost()
+#12 /var/www/html/prestashop_edition_classic_version_8.2.6/webservice/dispatcher.php(94): WebserviceRequestCore->fetch('4TL3WHGWM1LYH3Q...', 'POST', 'orders', Array, false, '<?xml version="...')
+#13 {main}
+
+Next PrestaShopException: SQLSTATE[23000]: Integrity constraint violation: 1048 Column 'secure_key' cannot be null in /var/www/html/prestashop_edition_classic_version_8.2.6/classes/db/DbPDO.php:153
+Stack trace:
+#0 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/db/Db.php(377): DbPDOCore->_query('INSERT INTO `ps...')
+#1 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/db/Db.php(744): DbCore->query('INSERT INTO `ps...')
+#2 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/db/Db.php(477): DbCore->q('INSERT INTO `ps...', true)
+#3 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/ObjectModel.php(622): DbCore->insert('ps_orders', Array, true)
+#4 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/order/Order.php(311): ObjectModelCore->add(true, true)
+#5 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/PaymentModule.php(1083): OrderCore->add()
+#6 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/PaymentModule.php(354): PaymentModuleCore->createOrderFromCart(Object(Cart), Object(Currency), Array, 13, Object(Context), 'WEDHSIGRD', NULL, 'Paiement \xC3\xA0 la ...', 'ps_cashondelive...', false, 9.47, 0, 10.0, false, Object(OrderState), '8', 1)
+#7 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/order/Order.php(1800): PaymentModuleCore->validateOrder('27', '8', '9.470000', 'Paiement \xC3\xA0 la ...', NULL, Array, NULL, false, NULL)
+#8 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/webservice/WebserviceRequest.php(1671): OrderCore->addWs()
+#9 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/webservice/WebserviceRequest.php(1446): WebserviceRequestCore->saveEntityFromXml(201)
+#10 /var/www/html/prestashop_edition_classic_version_8.2.6/classes/webservice/WebserviceRequest.php(582): WebserviceRequestCore->executeEntityPost()
+#11 /var/www/html/prestashop_edition_classic_version_8.2.6/webservice/dispatcher.php(94): WebserviceRequestCore->fetch('4TL3WHGWM1LYH3Q...', 'POST', 'orders', Array, false, '<?xml version="...')
+#12 {main}
+  thrown in /var/www/html/prestashop_edition_classic_version_8.2.6/classes/db/DbPDO.php on line 153
