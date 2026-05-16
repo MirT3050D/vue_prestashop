@@ -3,6 +3,7 @@ import { onMounted, ref, computed } from 'vue';
 import ProductPanier from '@/components/frontoffice/ProductPanier.vue';
 import { Icon } from '@iconify/vue';
 import { getXml, postXml, getImage } from '@/service/api';
+import { calculateTtc, getProductTaxRate } from '@/service/price';
 import { useRouter } from 'vue-router';
 
 const router = useRouter();
@@ -19,12 +20,18 @@ async function loadCart() {
     let cartJson = localStorage.getItem("panier");
     if (cartJson) {
         try {
-            panier.value = JSON.parse(cartJson);
-            
+            const parsedCart = JSON.parse(cartJson);
+            const enrichedCart = [];
+
             // Re-charger les images (les blobs URLs expirent au refresh)
-            for (let i = 0; i < panier.value.length; i++) {
-                let item = panier.value[i];
+            for (let i = 0; i < parsedCart.length; i++) {
+                let item = parsedCart[i];
+                let image = item.image || null;
+                let taxRate = item.taxRate;
                 try {
+                    if (taxRate == null) {
+                        taxRate = await getProductTaxRate(item.id_product);
+                    }
                     const productData = await getXml(`products/${item.id_product}`);
                     const p = productData.prestashop.product;
                     if (p.id_default_image) {
@@ -36,12 +43,19 @@ async function loadCart() {
                         }
                         
                         const path = `images/products/${item.id_product}/${imgId}`;
-                        item.image = await getImage(path);
+                        image = await getImage(path);
                     }
                 } catch (err) {
                     console.warn("Erreur image pour produit " + item.id_product, err);
                 }
+                enrichedCart.push({
+                    ...item,
+                    taxRate: Number(taxRate) || 0,
+                    image
+                });
             }
+            panier.value = enrichedCart;
+            localStorage.setItem("panier", JSON.stringify(enrichedCart));
         } catch (e) {
             panier.value = [];
         }
@@ -85,7 +99,7 @@ const totalPanier = computed(() => {
     let total = 0;
     for (let i = 0; i < panier.value.length; i++) {
         let item = panier.value[i];
-        const unitPriceTTC = Math.round(parseFloat(item.price) * 1.055 * 100) / 100;
+        const unitPriceTTC = calculateTtc(item.price, item.taxRate);
         total = total + (unitPriceTTC * item.quantity);
     }
     return total.toFixed(2);
@@ -327,7 +341,7 @@ async function passerCommande() {
                         v-for="(item, index) in panier" 
                         :key="index"
                         :nom="item.name"
-                        :prix="Math.round(item.price * 1.055 * 100) / 100"
+                        :prix="calculateTtc(item.price, item.taxRate)"
                         :quantite="item.quantity"
                         :image="item.image"
                         @update:quantite="(newQty) => updateQuantity(index, newQty)"

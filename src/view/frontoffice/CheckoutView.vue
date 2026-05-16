@@ -2,6 +2,7 @@
 import { ref, onMounted, computed } from 'vue';
 import { Icon } from '@iconify/vue';
 import { getXml, postXml, getImage } from '@/service/api';
+import { calculateTtc, getProductTaxRate } from '@/service/price';
 import { updateOrderStatusByHistory } from '@/service/orderService';
 import { useRouter } from 'vue-router';
 
@@ -16,6 +17,35 @@ const codStateId = ref(10); // Default fallback for COD
 
 const panier = ref([]);
 const customer = ref(null);
+
+async function enrichCartItem(item) {
+    let taxRate = item.taxRate;
+    let image = item.image || null;
+
+    if (taxRate == null) {
+        taxRate = await getProductTaxRate(item.id_product);
+    }
+
+    try {
+        const productData = await getXml(`products/${item.id_product}`);
+        const p = productData.prestashop.product;
+        if (p.id_default_image) {
+            let imgId = p.id_default_image;
+            if (typeof imgId === 'object' && imgId['#text']) imgId = imgId['#text'];
+            if (typeof imgId === 'object' && imgId['@_xlink:href']) {
+                 imgId = imgId['@_xlink:href'].split('/').pop();
+            }
+            const path = `images/products/${item.id_product}/${imgId}`;
+            image = await getImage(path);
+        }
+    } catch (e) {}
+
+    return {
+        ...item,
+        taxRate: Number(taxRate) || 0,
+        image
+    };
+}
 
 function extractText(value) {
     if (value === null || value === undefined) return '';
@@ -45,7 +75,7 @@ const form = ref({
 const totalPanier = computed(() => {
     let total = 0;
     for (let i = 0; i < panier.value.length; i++) {
-        const unitPriceTTC = Math.round(parseFloat(panier.value[i].price) * 1.055 * 100) / 100;
+        const unitPriceTTC = calculateTtc(panier.value[i].price, panier.value[i].taxRate);
         total = total + (unitPriceTTC * panier.value[i].quantity);
     }
     return total.toFixed(2);
@@ -108,39 +138,30 @@ onMounted(async () => {
     await findCodStateId();
 
     // Charger panier
-    let cartJson = localStorage.getItem('panier');
+    const cartJson = localStorage.getItem('panier');
     if (cartJson) {
-        try { 
-            panier.value = JSON.parse(cartJson); 
-            
-            // Re-charger les images (les blobs expirent)
-            for (let i = 0; i < panier.value.length; i++) {
-                let item = panier.value[i];
-                try {
-                    const productData = await getXml(`products/${item.id_product}`);
-                    const p = productData.prestashop.product;
-                    if (p.id_default_image) {
-                        let imgId = p.id_default_image;
-                        if (typeof imgId === 'object' && imgId['@_xlink:href']) {
-                             imgId = imgId['@_xlink:href'].split('/').pop();
-                        } else if (typeof imgId === 'object' && imgId['#text']) {
-                             imgId = imgId['#text'];
-                        }
-                        const path = `images/products/${item.id_product}/${imgId}`;
-                        item.image = await getImage(path);
-                    }
-                } catch (e) {}
-            }
-        } catch (e) { panier.value = []; }
+        try {
+            const parsedCart = JSON.parse(cartJson);
+            panier.value = await Promise.all(parsedCart.map((item) => enrichCartItem(item)));
+            localStorage.setItem('panier', JSON.stringify(panier.value));
+        } catch (e) {
+            panier.value = [];
+        }
     }
 
     // Charger client
-    let customerJson = localStorage.getItem('customer');
+    const customerJson = localStorage.getItem('customer');
     if (!customerJson) {
         router.push('/connexion');
         return;
     }
-    try { customer.value = JSON.parse(customerJson); } catch (e) { router.push('/connexion'); return; }
+
+    try {
+        customer.value = JSON.parse(customerJson);
+    } catch (e) {
+        router.push('/connexion');
+        return;
+    }
 
     if (!customer.value || !customer.value.id) {
         router.push('/connexion');
@@ -151,23 +172,21 @@ onMounted(async () => {
     form.value.firstname = customer.value.firstname || '';
     form.value.lastname = customer.value.lastname || '';
 
-
-
     // Tenter de récupérer une adresse existante
     try {
-        let adresseData = await getXml(`addresses?display=full&filter[id_customer]=[${customer.value.id}]`);
+        const adresseData = await getXml(`addresses?display=full&filter[id_customer]=[${customer.value.id}]`);
         if (adresseData && adresseData.prestashop && adresseData.prestashop.addresses) {
             let adresses = adresseData.prestashop.addresses.address;
             if (!Array.isArray(adresses)) adresses = [adresses];
             if (adresses.length > 0) {
-                let a = adresses[0];
+                const a = adresses[0];
                 form.value.firstname = a.firstname || form.value.firstname;
-                form.value.lastname  = a.lastname  || form.value.lastname;
-                form.value.address1  = a.address1  || '';
-                form.value.postcode  = a.postcode  || '';
-                form.value.city      = a.city      || '';
-                form.value.phone     = a.phone     || '';
-                form.value.alias     = a.alias     || 'Mon adresse';
+                form.value.lastname = a.lastname || form.value.lastname;
+                form.value.address1 = a.address1 || '';
+                form.value.postcode = a.postcode || '';
+                form.value.city = a.city || '';
+                form.value.phone = a.phone || '';
+                form.value.alias = a.alias || 'Mon adresse';
             }
         }
     } catch (e) {
@@ -491,7 +510,7 @@ async function passerCommande() {
                             <span class="summary-item-qty">x{{ item.quantity }}</span>
                         </div>
                         <span class="summary-item-price">
-                            {{ (Math.round(parseFloat(item.price) * 1.055 * 100) / 100 * item.quantity).toFixed(2) }} €
+                            {{ (calculateTtc(item.price, item.taxRate) * item.quantity).toFixed(2) }} €
                         </span>
                     </div>
                 </div>

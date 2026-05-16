@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue';
 import { getXml, getImage, postXml } from '@/service/api';
+import { getProductTaxRate } from '@/service/price';
 import Loading from '@/components/Loading.vue';
 import { useRoute } from 'vue-router';
 import { Icon } from '@iconify/vue';
@@ -13,6 +14,7 @@ const variants = ref([]);
 const selectedOptions = ref({});
 const productCombinations = ref([]);
 const quantity = ref(1);
+const productTaxRate = ref(0);
 
 function getLangText(field) {
     if (!field || !field.language) return '';
@@ -93,6 +95,7 @@ onMounted(async () => {
         // Récupération des données du produit
         const data = await getXml(`products/${id}`);
         product.value = data["prestashop"]["product"];
+        productTaxRate.value = await getProductTaxRate(id);
 
         // Récupération de toutes les combinaisons du produit pour les images dynamiques
         try {
@@ -354,6 +357,7 @@ function putInCart() {
             quantity: quantity.value,
             name: getLangText(product.value.name),
             price: parseFloat(product.value.price),
+            taxRate: productTaxRate.value,
             image: imageUrl.value
         };
         cart.push(newItem);
