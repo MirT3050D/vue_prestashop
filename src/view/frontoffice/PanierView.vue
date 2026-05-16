@@ -222,6 +222,19 @@ async function passerCommande() {
         // 5. Créer la commande PrestaShop
         // id_carrier = 1 (transporteur par défaut), id_payment = "free" pour les tests
                 const totalAmount = Number(totalPanier.value || 0).toFixed(6);
+                let orderRowsXml = '';
+                for (let i = 0; i < panier.value.length; i++) {
+                        let item = panier.value[i];
+                        let idProduct = item.id_product;
+                        let idAttribute = item.id_product_attribute || 0;
+                        let qty = item.quantity;
+                        orderRowsXml += `
+                <order_row>
+                    <product_id>${idProduct}</product_id>
+                    <product_attribute_id>${idAttribute}</product_attribute_id>
+                    <product_quantity>${qty}</product_quantity>
+                </order_row>`;
+                }
         let orderXml = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
   <order>
@@ -256,6 +269,10 @@ async function passerCommande() {
         <total_wrapping_tax_incl>0.000000</total_wrapping_tax_incl>
         <conversion_rate>1.000000</conversion_rate>
         <current_state>${codStateId.value}</current_state>
+        <associations>
+            <order_rows>${orderRowsXml}
+            </order_rows>
+        </associations>
   </order>
 </prestashop>`;
 

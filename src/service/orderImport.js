@@ -120,6 +120,22 @@ async function getTaxRateForGroup(taxRulesGroupId, taxRateCache, logCallback) {
     }
 }
 
+async function getCustomerDefaultGroupId(logCallback) {
+    try {
+        const configResp = await getXml('/configurations?display=full&filter[name]=[PS_CUSTOMER_GROUP]');
+        const configNode = configResp?.prestashop?.configurations?.configuration;
+        const config = Array.isArray(configNode) ? configNode[0] : configNode;
+        const groupId = Number(getNodeText(config?.value));
+        if (Number.isFinite(groupId) && groupId > 0) {
+            return groupId;
+        }
+    } catch (error) {
+        logCallback('warn', `Impossible de lire PS_CUSTOMER_GROUP: ${error.message}`);
+    }
+
+    return 3;
+}
+
 export const processOrderImport = async (data, logCallback) => {
     const customerCache = {};
     const productCache = {};
@@ -169,7 +185,24 @@ export const processOrderImport = async (data, logCallback) => {
                     customerId = getNodeText(existingCustomer.id);
                     secureKey = getNodeText(existingCustomer.secure_key);
                 } else {
-                    const customerPayload = { prestashop: { customer: { firstname, lastname, email, passwd: pwd || 'password', active: 1 } } };
+                    const defaultGroupId = await getCustomerDefaultGroupId(logCallback);
+                    const customerPayload = {
+                        prestashop: {
+                            customer: {
+                                firstname,
+                                lastname,
+                                email,
+                                passwd: pwd || 'password',
+                                active: 1,
+                                id_default_group: defaultGroupId,
+                                associations: {
+                                    groups: {
+                                        group: [{ id: defaultGroupId }]
+                                    }
+                                }
+                            }
+                        }
+                    };
                     const newCustomer = await postXml('/customers', customerPayload);
                     customerId = getNodeText(newCustomer.prestashop.customer.id);
                     createdEntities.customer = customerId;
@@ -193,6 +226,7 @@ export const processOrderImport = async (data, logCallback) => {
             }
 
             let cartRows = [];
+            let orderRows = [];
             let totalProductsHT = 0;
             let totalProductsWT = 0;
             for (const article of articles) {
@@ -223,6 +257,11 @@ export const processOrderImport = async (data, logCallback) => {
                     id_address_delivery: addressId,
                     quantity: article.qty,
                 });
+                orderRows.push({
+                    product_id: productInfo.id,
+                    product_attribute_id: variantId || 0,
+                    product_quantity: article.qty,
+                });
                 totalProductsHT += productInfo.priceHT * article.qty;
                 totalProductsWT += productInfo.priceWT * article.qty;
             }
@@ -231,26 +270,10 @@ export const processOrderImport = async (data, logCallback) => {
                 throw new Error(`Total commande invalide (${totalProductsWT}).`);
             }
 
-            logCallback('info', 'Étape 1: Création d\'un panier vide...');
-            const emptyCartPayload = { prestashop: { cart: {
-                id_currency: 1,
-                id_lang: 1,
-                id_customer: customerId,
-                id_address_delivery: addressId,
-                id_address_invoice: addressId,
-                id_carrier: 1,
-                id_shop: 1,
-                id_shop_group: 1,
-            }}};
-            const newCart = await postXml('/carts', emptyCartPayload);
-            createdEntities.cart = newCart.prestashop.cart.id;
-
-            logCallback('info', `Étape 2: Ajout des produits au panier ${createdEntities.cart} (via Schéma Vierge)...`);
-
-            const cleanPayload = {
+            logCallback('info', 'Étape 1 & 2: Création du panier avec les produits...');
+            const cartPayload = {
                 prestashop: {
                     cart: {
-                        id: createdEntities.cart,
                         id_address_delivery: addressId,
                         id_address_invoice: addressId,
                         id_customer: customerId,
@@ -267,95 +290,121 @@ export const processOrderImport = async (data, logCallback) => {
                     }
                 }
             };
-
-            await putXml(`/carts/${createdEntities.cart}`, cleanPayload);
+            const newCart = await postXml('/carts', cartPayload);
+            if (!newCart?.prestashop?.cart?.id) {
+                console.error('Cart creation failed. Response:', newCart);
+                throw new Error('La création du panier a échoué. Les produits n\'ont pas pu être ajoutés.');
+            }
+            createdEntities.cart = newCart.prestashop.cart.id;
 
             logCallback('info', 'Étape 3: Création de la commande...');
             const currentStateId = orderStates.get(etat.toLowerCase()) || 2;
             const totalPaidWT = totalProductsWT.toFixed(6);
             const totalPaidHT = totalProductsHT.toFixed(6);
+            const orderReference = `IMP${String(createdEntities.cart).padStart(6, '0')}`;
             logCallback('info', `Résumé panier: lignes=${cartRows.length}, total_ht=${totalPaidHT}, total_ttc=${totalPaidWT}`);
             logCallback('info', `Résumé commande: client=${customerId}, adresse=${addressId}, panier=${createdEntities.cart}, transporteur=1, état=${currentStateId}`);
-            const orderPayload = {
-                prestashop: {
-                    order: {
-                        id_customer: customerId,
-                        id_address_delivery: addressId,
-                        id_address_invoice: addressId,
-                        id_cart: createdEntities.cart,
-                        id_carrier: 1,
-                        id_currency: 1,
-                        id_lang: 1,
-                        id_shop: 1,
-                        id_shop_group: 1,
-                        module: 'ps_checkpayment',
-                        payment: 'Import CSV',
-                        total_paid: totalPaidWT,
-                        total_paid_real: '0.000000',
-                        total_paid_tax_incl: totalPaidWT,
-                        total_paid_tax_excl: totalPaidHT,
-                        total_products: totalPaidHT,
-                        total_products_wt: totalPaidWT,
-                        total_shipping: '0.000000',
-                        total_shipping_tax_excl: '0.000000',
-                        total_shipping_tax_incl: '0.000000',
-                        total_discounts: '0.000000',
-                        total_discounts_tax_excl: '0.000000',
-                        total_discounts_tax_incl: '0.000000',
-                        total_wrapping: '0.000000',
-                        total_wrapping_tax_excl: '0.000000',
-                        total_wrapping_tax_incl: '0.000000',
-                        conversion_rate: '1.000000',
-                        current_state: currentStateId,
-                        secure_key: secureKey || undefined
-                    }
-                }
-            };
+                        let orderRowsXml = '';
+                        for (const row of orderRows) {
+                                orderRowsXml += `
+                <order_row>
+                    <product_id>${row.product_id}</product_id>
+                    <product_attribute_id>${row.product_attribute_id}</product_attribute_id>
+                    <product_quantity>${row.product_quantity}</product_quantity>
+                </order_row>`;
+                        }
+
+                        const orderPayload = `<?xml version="1.0" encoding="UTF-8"?>
+<prestashop>
+    <order>
+        <id_customer>${customerId}</id_customer>
+        <id_address_delivery>${addressId}</id_address_delivery>
+        <id_address_invoice>${addressId}</id_address_invoice>
+        <id_cart>${createdEntities.cart}</id_cart>
+        <id_carrier>1</id_carrier>
+        <id_currency>1</id_currency>
+        <id_lang>1</id_lang>
+        <id_shop>1</id_shop>
+        <id_shop_group>1</id_shop_group>
+        <reference>${orderReference}</reference>
+        <module>ps_checkpayment</module>
+        <payment>Import CSV</payment>
+        <total_paid>${totalPaidWT}</total_paid>
+        <total_paid_real>0.000000</total_paid_real>
+        <total_paid_tax_incl>${totalPaidWT}</total_paid_tax_incl>
+        <total_paid_tax_excl>${totalPaidHT}</total_paid_tax_excl>
+        <total_products>${totalPaidHT}</total_products>
+        <total_products_wt>${totalPaidWT}</total_products_wt>
+        <total_shipping>0.000000</total_shipping>
+        <total_shipping_tax_excl>0.000000</total_shipping_tax_excl>
+        <total_shipping_tax_incl>0.000000</total_shipping_tax_incl>
+        <total_discounts>0.000000</total_discounts>
+        <total_discounts_tax_excl>0.000000</total_discounts_tax_excl>
+        <total_discounts_tax_incl>0.000000</total_discounts_tax_incl>
+        <total_wrapping>0.000000</total_wrapping>
+        <total_wrapping_tax_excl>0.000000</total_wrapping_tax_excl>
+        <total_wrapping_tax_incl>0.000000</total_wrapping_tax_incl>
+        <conversion_rate>1.000000</conversion_rate>
+        <current_state>${currentStateId}</current_state>
+        ${secureKey ? `<secure_key>${secureKey}</secure_key>` : ''}
+        <associations>
+            <order_rows>${orderRowsXml}
+            </order_rows>
+        </associations>
+    </order>
+</prestashop>`;
             
             const newOrder = await postXml('/orders', orderPayload);
-            createdEntities.order = newOrder.prestashop.order.id;
+                        createdEntities.order = getNodeText(newOrder?.prestashop?.order?.id || newOrder?.prestashop?.order?.['@_id']);
+                        if (!createdEntities.order) {
+                                throw new Error('La création de la commande a renvoyé une réponse inattendue.');
+                        }
             
             logCallback('info', `Étape 4: Mise à jour de la date de la commande ${createdEntities.order}...`);
             const [day, month, year] = date.split('/');
-            const orderDatesPayload = {
-                prestashop: {
-                    order: {
-                        id: createdEntities.order,
-                        id_address_delivery: addressId,
-                        id_address_invoice: addressId,
-                        id_customer: customerId,
-                        id_cart: createdEntities.cart,
-                        id_currency: 1,
-                        id_lang: 1,
-                        id_carrier: 1,
-                        id_shop: 1,
-                        id_shop_group: 1,
-                        module: 'ps_checkpayment',
-                        payment: 'Import CSV',
-                        current_state: currentStateId,
-                        total_paid: totalPaidWT,
-                        total_paid_real: '0.000000',
-                        total_paid_tax_incl: totalPaidWT,
-                        total_paid_tax_excl: totalPaidHT,
-                        total_products: totalPaidHT,
-                        total_products_wt: totalPaidWT,
-                        total_shipping: '0.000000',
-                        total_shipping_tax_excl: '0.000000',
-                        total_shipping_tax_incl: '0.000000',
-                        total_discounts: '0.000000',
-                        total_discounts_tax_excl: '0.000000',
-                        total_discounts_tax_incl: '0.000000',
-                        total_wrapping: '0.000000',
-                        total_wrapping_tax_excl: '0.000000',
-                        total_wrapping_tax_incl: '0.000000',
-                        conversion_rate: '1.000000',
-                        secure_key: secureKey || undefined,
-                        date_add: `${year}-${month}-${day} 12:00:00`,
-                        invoice_date: `${year}-${month}-${day} 12:00:00`,
-                        delivery_date: `${year}-${month}-${day} 12:00:00`
-                    }
-                }
-            };
+                        const orderDatesPayload = `<?xml version="1.0" encoding="UTF-8"?>
+<prestashop>
+    <order>
+        <id>${createdEntities.order}</id>
+        <id_customer>${customerId}</id_customer>
+        <id_address_delivery>${addressId}</id_address_delivery>
+        <id_address_invoice>${addressId}</id_address_invoice>
+        <id_cart>${createdEntities.cart}</id_cart>
+        <id_carrier>1</id_carrier>
+        <id_currency>1</id_currency>
+        <id_lang>1</id_lang>
+        <id_shop>1</id_shop>
+        <id_shop_group>1</id_shop_group>
+        <reference>${orderReference}</reference>
+        <module>ps_checkpayment</module>
+        <payment>Import CSV</payment>
+        <current_state>${currentStateId}</current_state>
+        <total_paid>${totalPaidWT}</total_paid>
+        <total_paid_real>0.000000</total_paid_real>
+        <total_paid_tax_incl>${totalPaidWT}</total_paid_tax_incl>
+        <total_paid_tax_excl>${totalPaidHT}</total_paid_tax_excl>
+        <total_products>${totalPaidHT}</total_products>
+        <total_products_wt>${totalPaidWT}</total_products_wt>
+        <total_shipping>0.000000</total_shipping>
+        <total_shipping_tax_excl>0.000000</total_shipping_tax_excl>
+        <total_shipping_tax_incl>0.000000</total_shipping_tax_incl>
+        <total_discounts>0.000000</total_discounts>
+        <total_discounts_tax_excl>0.000000</total_discounts_tax_excl>
+        <total_discounts_tax_incl>0.000000</total_discounts_tax_incl>
+        <total_wrapping>0.000000</total_wrapping>
+        <total_wrapping_tax_excl>0.000000</total_wrapping_tax_excl>
+        <total_wrapping_tax_incl>0.000000</total_wrapping_tax_incl>
+        <conversion_rate>1.000000</conversion_rate>
+        <secure_key>${secureKey || ''}</secure_key>
+        <date_add>${year}-${month}-${day} 12:00:00</date_add>
+        <invoice_date>${year}-${month}-${day} 12:00:00</invoice_date>
+        <delivery_date>${year}-${month}-${day} 12:00:00</delivery_date>
+        <associations>
+            <order_rows>${orderRowsXml}
+            </order_rows>
+        </associations>
+    </order>
+</prestashop>`;
             await putXml(`/orders/${createdEntities.order}`, orderDatesPayload);
 
             logCallback('success', `Ligne ${index + 1} importée avec succès. Commande ID: ${createdEntities.order}`);
