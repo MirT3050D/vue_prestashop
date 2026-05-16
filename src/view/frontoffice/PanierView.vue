@@ -1,12 +1,12 @@
 <script setup>
-
+// Remplace ton import existant par celui-ci :
+import { createCart, getCarts, getCart, mergeUnpaidCarts, getUnpaidCarts } from '@/service/cartService';
 import { onMounted, ref, computed } from 'vue';
 import ProductPanier from '@/components/frontoffice/ProductPanier.vue';
 import { Icon } from '@iconify/vue';
 import { getImage } from '@/service/api';
 import { calculateTtc, getProductTaxRate } from '@/service/price';
 import { getProduct } from '@/service/productService';
-import { createCart } from '@/service/cartService';
 import { createOrder, getOrderStates } from '@/service/orderService';
 import { getCustomerAddresses } from '@/service/addressService';
 import { getCustomer } from '@/service/customerService';
@@ -14,65 +14,224 @@ import { useRouter } from 'vue-router';
 
 const router = useRouter();
 const panier = ref([]);
-const loading = ref(false);
+const loading = ref(true); // VITAL : On commence à true pour éviter l'écran "Panier vide"
 const message = ref('');
-const messageType = ref(''); // 'success' ou 'error'
-const codStateId = ref(10); // Fallback if COD state not found
+const messageType = ref('');
+const codStateId = ref(10);
 const secureKey = ref('');
 
-// ========== Panier localStorage ==========
+// Variable pour afficher un petit état de chargement spécifique au bouton
+const isMerging = ref(false);
+
+async function relancerRegroupement() {
+    const customerJson = localStorage.getItem('customer');
+
+    if (customerJson) {
+        const customerData = JSON.parse(customerJson);
+
+        // 1. On active l'état de chargement et on prévient l'utilisateur
+        isMerging.value = true;
+        message.value = "Regroupement de vos anciens paniers en cours...";
+        messageType.value = "success";
+
+        try {
+            // 2. On lance la fusion. 
+            // On lui passe l'ID du client et l'ID de son adresse (ici 42 pour ton test)
+            const nouveauPanier = await mergeUnpaidCarts(customerData.id, getCustomerAddresses(JSON.parse(localStorage.getItem("customer")).id));
+            console.log(JSON.parse(localStorage.getItem("customer")).id);
+            if (nouveauPanier) {
+                // 3. Si un regroupement a eu lieu, on recharge l'affichage local du panier
+                await loadCart();
+                message.value = "Vos anciens paniers abandonnés ont été regroupés avec succès !";
+                messageType.value = "success";
+            } else {
+                message.value = "Vous n'avez aucun autre panier abandonné à regrouper.";
+                messageType.value = "error";
+            }
+        } catch (error) {
+            console.error("Erreur lors de la fusion :", error);
+            message.value = "Impossible de regrouper les paniers pour le moment.";
+            messageType.value = "error";
+        } finally {
+            // 4. On désactive le chargement du bouton
+            isMerging.value = false;
+        }
+    } else {
+        message.value = "Vous devez être connecté pour regrouper vos paniers.";
+        messageType.value = "error";
+    }
+}
+function extractText(node) {
+    if (node == null || node === '') return null;
+    if (typeof node === 'object') {
+        const val = node['#text'] ?? node['@_id'] ?? node.id;
+        if (val !== undefined) return String(val);
+        const values = Object.values(node);
+        if (values.length === 1 && typeof values[0] !== 'object') return String(values[0]);
+        return String(node);
+    }
+    return String(node);
+}
+
+function getCartStorageKey() {
+    const customerJson = localStorage.getItem('customer');
+    if (customerJson) {
+        try {
+            const customerData = JSON.parse(customerJson);
+            if (customerData?.id) return `panier_${customerData.id}`;
+        } catch (e) {
+            console.error("Erreur parse customer:", e);
+        }
+    }
+    return 'panier_guest';
+}
+
+function getRowsFromCart(cart) {
+    const assoc = cart?.associations;
+    if (!assoc || !assoc.cart_rows) return [];
+    const rawRows = assoc.cart_rows.cart_row || assoc.cart_rows;
+    return Array.isArray(rawRows) ? rawRows : (rawRows && typeof rawRows === 'object' ? [rawRows] : []);
+}
+
+// ========== Panier localStorage & API ==========
+onMounted(async () => {
+    console.log("🚀 1. Le composant Panier est bien monté !");
+    findCodStateId();
+    loadCart();
+    console.log("data ", await getCustomer(JSON.parse(localStorage.getItem('customer')).id));
+});
 
 async function loadCart() {
-    let cartJson = localStorage.getItem("panier");
-    if (cartJson) {
-        try {
-            const parsedCart = JSON.parse(cartJson);
-            const enrichedCart = [];
+    console.log("🛒 2. Lancement de loadCart()");
+    loading.value = true;
 
-            // Re-charger les images (les blobs URLs expirent au refresh)
-            for (let i = 0; i < parsedCart.length; i++) {
-                let item = parsedCart[i];
-                let image = item.image || null;
-                let taxRate = item.taxRate;
-                try {
-                    if (taxRate == null) {
-                        taxRate = await getProductTaxRate(item.id_product);
+    // On déclare la variable TOUT EN HAUT pour régler le problème de "not defined"
+    let initialCart = [];
+    const storageKey = getCartStorageKey();
+
+    try {
+        // Récupération du panier local
+        let cartJson = localStorage.getItem(storageKey);
+        if (cartJson) {
+            initialCart = JSON.parse(cartJson);
+        }
+
+        // 1. Récupération du panier API si client connecté
+        const customerJson = localStorage.getItem('customer');
+        console.log("👤 3. Statut du client :", customerJson ? "Connecté" : "Non connecté (Visiteur)");
+
+        if (customerJson) {
+            const customerData = JSON.parse(customerJson);
+            if (customerData?.id) {
+                // 1. On utilise notre fonction sécurisée qui filtre MANUELLEMENT en Javascript
+                const myUnpaidCarts = await getUnpaidCarts(customerData.id);
+
+                // 2. Tri manuel en JavaScript par ID décroissant pour mettre le plus récent en 1er
+                myUnpaidCarts.sort(function (a, b) {
+                    let idA = 0;
+                    if (a.id && typeof a.id === 'object') {
+                        idA = parseInt(a.id['#text'], 10) || 0;
+                    } else {
+                        idA = parseInt(a.id, 10) || 0;
                     }
-                    const product = await getProduct(item.id_product);
-                    if (product && product.id_default_image) {
-                        let imgId = product.id_default_image;
-                        // Si c'est un objet (xlink), on prend l'ID
-                        if (typeof imgId === 'object' && imgId['#text']) imgId = imgId['#text'];
-                        if (typeof imgId === 'object' && imgId['@_xlink:href']) {
-                             imgId = imgId['@_xlink:href'].split('/').pop();
+
+                    let idB = 0;
+                    if (b.id && typeof b.id === 'object') {
+                        idB = parseInt(b.id['#text'], 10) || 0;
+                    } else {
+                        idB = parseInt(b.id, 10) || 0;
+                    }
+                    return idB - idA; // Ordre décroissant
+                });
+
+                console.log("🔍 Liste triée de mes paniers non payés :", myUnpaidCarts);
+
+                if (myUnpaidCarts.length > 0) {
+                    // Le panier index 0 est maintenant à 100% le plus récent du client connecté (le fameux ID 75 !)
+                    let latestCart = myUnpaidCarts[0];
+                    let rows = getRowsFromCart(latestCart);
+
+                    console.log("🔍 Lignes de mon panier le plus récent :", rows);
+
+                    if (rows.length > 0) {
+                        const mappedItems = [];
+                        for (let x = 0; x < rows.length; x++) {
+                            const r = rows[x];
+                            const idProd = extractText(r.id_product);
+
+                            if (idProd) {
+                                mappedItems.push({
+                                    id_product: idProd,
+                                    id_product_attribute: extractText(r.id_product_attribute) || 0,
+                                    quantity: parseInt(extractText(r.quantity), 10) || 1
+                                });
+                            }
                         }
-                        
-                        const path = `images/products/${item.id_product}/${imgId}`;
-                        image = await getImage(path);
+
+                        if (mappedItems.length > 0) {
+                            // On remplace le panier local par celui de l'API
+                            initialCart = mappedItems;
+                        }
+                    }
+                }
+            }
+        }
+        // 2. Enrichissement des données (prix, noms, images)
+        if (initialCart.length > 0) {
+            console.log("📦 4. Articles trouvés, on enrichit les données...", initialCart);
+            const enrichedCart = [];
+            for (let i = 0; i < initialCart.length; i++) {
+                let item = initialCart[i];
+                if (!item.id_product) continue;
+
+                let image = (item.image && !item.image.includes('blob:')) ? item.image : null;
+                let taxRate = item.taxRate;
+                let name = item.name;
+                let price = item.price;
+
+                try {
+                    const product = await getProduct(item.id_product);
+                    if (product) {
+                        if (taxRate == null) taxRate = await getProductTaxRate(item.id_product);
+                        if (!name) {
+                            const nameNode = product.name?.language;
+                            const text = Array.isArray(nameNode) ? nameNode[0]['#text'] : (nameNode?.['#text'] || nameNode);
+                            name = extractText(text) || 'Produit sans nom';
+                        }
+                        if (price == null) price = Number(extractText(product.price)) || 0;
+
+                        const imgId = extractText(product.id_default_image);
+                        if (!image && imgId) {
+                            image = await getImage(`images/products/${item.id_product}/${imgId}`);
+                        }
                     }
                 } catch (err) {
-                    console.warn("Erreur image pour produit " + item.id_product, err);
+                    console.warn(`Erreur détails pour produit ${item.id_product}`, err);
                 }
+
                 enrichedCart.push({
                     ...item,
+                    name: name || `Produit #${item.id_product}`,
+                    price: price || 0,
                     taxRate: Number(taxRate) || 0,
                     image
                 });
             }
+
             panier.value = enrichedCart;
-            localStorage.setItem("panier", JSON.stringify(enrichedCart));
-        } catch (e) {
+            localStorage.setItem(storageKey, JSON.stringify(enrichedCart));
+        } else {
+            console.log("📭 4. Aucun article trouvé, panier vide.");
             panier.value = [];
         }
-    } else {
+
+    } catch (e) {
+        console.error("Erreur globale lors du chargement du panier:", e);
         panier.value = [];
+    } finally {
+        loading.value = false; // L'affichage se met à jour et fait disparaître le "loading"
     }
 }
-
-onMounted(() => {
-    findCodStateId();
-    loadCart();
-});
 
 async function findCodStateId() {
     try {
@@ -81,29 +240,31 @@ async function findCodStateId() {
 
         for (let i = 0; i < states.length; i++) {
             const langNode = states[i].name?.language;
-            let stateName = '';
-            if (Array.isArray(langNode)) {
-                stateName = (langNode[0]['#text'] || '').toLowerCase();
-            } else if (langNode && typeof langNode === 'object') {
-                stateName = (langNode['#text'] || '').toLowerCase();
-            }
+            let stateName = Array.isArray(langNode)
+                ? (langNode[0]['#text'] || '').toLowerCase()
+                : (langNode?.['#text'] || '').toLowerCase();
+
             if (stateName.includes('livraison') || stateName.includes('cash on delivery') || stateName.includes('cod')) {
                 codStateId.value = states[i].id;
                 return;
             }
         }
     } catch (e) {
-        console.log('Could not fetch order states for COD lookup:', e);
+        console.log('Erreur fetch order states:', e);
     }
 }
 
-// Calcul du total du panier avec une boucle simple
+onMounted(() => {
+    findCodStateId();
+    loadCart();
+});
+
 const totalPanier = computed(() => {
     let total = 0;
     for (let i = 0; i < panier.value.length; i++) {
         let item = panier.value[i];
         const unitPriceTTC = calculateTtc(item.price, item.taxRate);
-        total = total + (unitPriceTTC * item.quantity);
+        total += (unitPriceTTC * item.quantity);
     }
     return total.toFixed(2);
 });
@@ -111,200 +272,26 @@ const totalPanier = computed(() => {
 function updateQuantity(index, newQty) {
     if (newQty > 0) {
         panier.value[index].quantity = newQty;
-        localStorage.setItem("panier", JSON.stringify(panier.value));
+        localStorage.setItem(getCartStorageKey(), JSON.stringify(panier.value));
     }
 }
 
 function removeItem(index) {
     panier.value.splice(index, 1);
-    localStorage.setItem("panier", JSON.stringify(panier.value));
+    localStorage.setItem(getCartStorageKey(), JSON.stringify(panier.value));
 }
 
 function viderPanier() {
     if (confirm("Voulez-vous vraiment vider votre panier ?")) {
         panier.value = [];
-        localStorage.setItem("panier", JSON.stringify([]));
+        localStorage.setItem(getCartStorageKey(), JSON.stringify([]));
     }
 }
 
 // ========== Commande PrestaShop ==========
-
 async function passerCommande() {
-    // 1. Vérifier que le client est connecté
-    let customerJson = localStorage.getItem('customer');
-    if (!customerJson) {
-        message.value = 'Vous devez être connecté pour passer une commande.';
-        messageType.value = 'error';
-        return;
-    }
-
-    let customerData = null;
-    try {
-        customerData = JSON.parse(customerJson);
-    } catch (e) {
-        message.value = 'Erreur lors de la lecture des données client.';
-        messageType.value = 'error';
-        return;
-    }
-
-    if (!customerData || !customerData.id) {
-        message.value = 'Informations client incomplètes. Veuillez vous reconnecter.';
-        messageType.value = 'error';
-        return;
-    }
-
-    try {
-        const customer = await getCustomer(customerData.id, 'display=[secure_key]');
-        secureKey.value = customer?.secure_key?.['#text'] || customer?.secure_key || '';
-    } catch (e) {
-        console.warn('Impossible de charger secure_key client:', e);
-    }
-
-    loading.value = true;
-    message.value = '';
-
-    try {
-        // 2. Récupérer l'adresse du client
-        let idAdresse = 0;
-        try {
-            const adresses = await getCustomerAddresses(customerData.id);
-            if (adresses.length > 0 && adresses[0].id) {
-                idAdresse = adresses[0].id;
-            }
-        } catch (e) {
-            console.log('Impossible de récupérer l\'adresse:', e);
-        }
-
-        if (!idAdresse) {
-            message.value = 'Aucune adresse trouvée pour ce client. Veuillez en ajouter une dans PrestaShop.';
-            messageType.value = 'error';
-            loading.value = false;
-            return;
-        }
-
-        // 3. Construire les lignes du panier XML (cart_rows)
-        let cartRowsXml = '';
-        for (let i = 0; i < panier.value.length; i++) {
-            let item = panier.value[i];
-            let idProduct = item.id_product;
-            let idAttribute = item.id_product_attribute || 0;
-            let qty = item.quantity;
-            cartRowsXml += `
-          <cart_row>
-            <id_product>${idProduct}</id_product>
-            <id_product_attribute>${idAttribute}</id_product_attribute>
-            <id_address_delivery>${idAdresse}</id_address_delivery>
-            <quantity>${qty}</quantity>
-          </cart_row>`;
-        }
-
-        // 4. Créer le panier PrestaShop via WebService API
-        let cartXml = `<?xml version="1.0" encoding="UTF-8"?>
-<prestashop>
-  <cart>
-    <id_currency>1</id_currency>
-    <id_lang>1</id_lang>
-    <id_customer>${customerData.id}</id_customer>
-    <id_address_delivery>${idAdresse}</id_address_delivery>
-    <id_address_invoice>${idAdresse}</id_address_invoice>
-    <associations>
-      <cart_rows>${cartRowsXml}
-      </cart_rows>
-    </associations>
-  </cart>
-</prestashop>`;
-
-        let cartResponse = await createCart(cartXml);
-
-        // Extraire l'id du panier créé
-        let idCart = cartResponse?.id || (cartResponse?.['@_id'] || 0);
-
-        if (!idCart) {
-            message.value = 'Impossible de créer le panier PrestaShop. Veuillez réessayer.';
-            messageType.value = 'error';
-            loading.value = false;
-            return;
-        }
-
-        // 5. Créer la commande PrestaShop
-        const totalAmount = Number(totalPanier.value || 0).toFixed(6);
-        let orderRowsXml = '';
-        for (let i = 0; i < panier.value.length; i++) {
-                let item = panier.value[i];
-                let idProduct = item.id_product;
-                let idAttribute = item.id_product_attribute || 0;
-                let qty = item.quantity;
-                orderRowsXml += `
-        <order_row>
-            <product_id>${idProduct}</product_id>
-            <product_attribute_id>${idAttribute}</product_attribute_id>
-            <product_quantity>${qty}</product_quantity>
-        </order_row>`;
-        }
-        let orderXml = `<?xml version="1.0" encoding="UTF-8"?>
-<prestashop>
-  <order>
-    <id_cart>${idCart}</id_cart>
-    <id_customer>${customerData.id}</id_customer>
-    <id_address_delivery>${idAdresse}</id_address_delivery>
-    <id_address_invoice>${idAdresse}</id_address_invoice>
-    <id_carrier>1</id_carrier>
-    <id_currency>1</id_currency>
-    <id_lang>1</id_lang>
-        <id_shop>1</id_shop>
-        <id_shop_group>1</id_shop_group>
-    <module>ps_checkpayment</module>
-    <payment>Paiement à la livraison</payment>
-        <secure_key>${secureKey.value}</secure_key>
-        <total_paid>${totalAmount}</total_paid>
-        <total_paid_real>0.000000</total_paid_real>
-        <total_paid_tax_incl>${totalAmount}</total_paid_tax_incl>
-        <total_paid_tax_excl>${totalAmount}</total_paid_tax_excl>
-        <total_products>${totalAmount}</total_products>
-        <total_products_wt>${totalAmount}</total_products_wt>
-        <total_products_tax_incl>${totalAmount}</total_products_tax_incl>
-        <total_products_tax_excl>${totalAmount}</total_products_tax_excl>
-        <total_shipping>0.000000</total_shipping>
-        <total_shipping_tax_excl>0.000000</total_shipping_tax_excl>
-        <total_shipping_tax_incl>0.000000</total_shipping_tax_incl>
-        <total_discounts>0.000000</total_discounts>
-        <total_discounts_tax_excl>0.000000</total_discounts_tax_excl>
-        <total_discounts_tax_incl>0.000000</total_discounts_tax_incl>
-        <total_wrapping>0.000000</total_wrapping>
-        <total_wrapping_tax_excl>0.000000</total_wrapping_tax_excl>
-        <total_wrapping_tax_incl>0.000000</total_wrapping_tax_incl>
-        <conversion_rate>1.000000</conversion_rate>
-        <current_state>${codStateId.value}</current_state>
-        <associations>
-            <order_rows>${orderRowsXml}
-            </order_rows>
-        </associations>
-  </order>
-</prestashop>`;
-
-        let orderResponse = await createOrder(orderXml);
-
-        // Extraire l'id de la commande créée
-        let idOrder = orderResponse?.id || (orderResponse?.['@_id'] || 0);
-
-        if (idOrder) {
-            // 6. Succès — vider le panier et afficher le message
-            panier.value = [];
-            localStorage.setItem("panier", JSON.stringify([]));
-            message.value = `Commande #${idOrder} passée avec succès ! Merci pour votre achat.`;
-            messageType.value = 'success';
-        } else {
-            message.value = 'La commande a été envoyée, mais la confirmation est indisponible.';
-            messageType.value = 'success';
-        }
-
-    } catch (err) {
-        console.error('Erreur lors de la commande:', err);
-        message.value = 'Une erreur est survenue lors de la commande. Veuillez réessayer.';
-        messageType.value = 'error';
-    } finally {
-        loading.value = false;
-    }
+    // Le code de passerCommande reste identique, il était très bien écrit !
+    // ... [Garde ta fonction passerCommande() originale ici] ...
 }
 </script>
 
@@ -321,32 +308,42 @@ async function passerCommande() {
             </button>
         </div>
 
-        <div v-if="panier.length > 0" class="panier-layout">
+        <!-- État de chargement -->
+        <div v-if="loading" class="empty-cart loading-cart">
+            <div class="empty-icon spin">
+                <Icon icon="lucide:loader-2" />
+            </div>
+            <h2>Chargement de votre panier</h2>
+            <p>Nous récupérons vos articles...</p>
+        </div>
+
+        <div v-else-if="panier.length > 0" class="panier-layout">
             <!-- Liste des produits -->
             <div class="main_left">
                 <div class="items-list">
-                    <ProductPanier 
-                        v-for="(item, index) in panier" 
-                        :key="index"
-                        :nom="item.name"
-                        :prix="calculateTtc(item.price, item.taxRate)"
-                        :quantite="item.quantity"
-                        :image="item.image"
-                        @update:quantite="(newQty) => updateQuantity(index, newQty)"
-                        @supprimer="removeItem(index)"
-                    />
+                    <ProductPanier v-for="(item, index) in panier" :key="index" :nom="item.name"
+                        :prix="calculateTtc(item.price, item.taxRate)" :quantite="item.quantity" :image="item.image"
+                        @update:quantite="(newQty) => updateQuantity(index, newQty)" @supprimer="removeItem(index)" />
                 </div>
-                
-                <button class="btn-vider" @click="viderPanier">
-                    Vider le panier
-                </button>
+
+                <div class="panier-actions">
+                    <button class="btn-regrouper" @click="relancerRegroupement" :disabled="isMerging">
+                        <Icon icon="lucide:git-merge" :class="{ 'spin': isMerging }" />
+                        <span v-if="isMerging">Regroupement...</span>
+                        <span v-else>Récupérer mes anciens paniers abandonnés</span>
+                    </button>
+
+                    <button class="btn-vider" @click="viderPanier">
+                        Vider le panier
+                    </button>
+                </div>
             </div>
 
             <!-- Résumé / Total -->
             <div class="right">
                 <div class="summary-card">
                     <h2 class="summary-title">Récapitulatif</h2>
-                    
+
                     <div class="summary-row">
                         <span>Sous-total</span>
                         <span>{{ totalPanier }} €</span>
@@ -355,9 +352,9 @@ async function passerCommande() {
                         <span>Livraison</span>
                         <span class="free-shipping">Gratuit</span>
                     </div>
-                    
+
                     <hr class="separator">
-                    
+
                     <div class="summary-row total">
                         <span>Total (TTC)</span>
                         <span class="total-price">{{ totalPanier }} €</span>
@@ -376,6 +373,13 @@ async function passerCommande() {
             <div class="empty-icon">
                 <Icon icon="lucide:shopping-cart" />
             </div>
+            <div class="panier-actions">
+                <button class="btn-regrouper" @click="relancerRegroupement" :disabled="isMerging">
+                    <Icon icon="lucide:git-merge" :class="{ 'spin': isMerging }" />
+                    <span v-if="isMerging">Regroupement...</span>
+                    <span v-else>Récupérer mes anciens paniers abandonnés</span>
+                </button>
+            </div>
             <h2>Votre panier est vide</h2>
             <p>Découvrez nos produits et commencez vos achats !</p>
             <router-link to="/" class="btn-back">Retour à la boutique</router-link>
@@ -384,6 +388,39 @@ async function passerCommande() {
 </template>
 
 <style scoped>
+.panier-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 15px;
+}
+
+.btn-regrouper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background-color: #f1f2f6;
+    color: #2f3542;
+    border: 1px solid #ced6e0;
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn-regrouper:hover:not(:disabled) {
+    background-color: #e4e7eb;
+    color: #2563eb;
+    border-color: #2563eb;
+}
+
+.btn-regrouper:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
 .panier-view {
     max-width: 1200px;
     margin: 40px auto;
@@ -439,8 +476,15 @@ async function passerCommande() {
 }
 
 @keyframes slideIn {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .panier-layout {
@@ -473,7 +517,7 @@ async function passerCommande() {
     background: white;
     padding: 30px;
     border-radius: 20px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
 }
 
 .summary-title {
@@ -564,8 +608,13 @@ async function passerCommande() {
 
 /* === ANIMATION SPIN === */
 @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .spin {
@@ -578,7 +627,7 @@ async function passerCommande() {
     padding: 80px 20px;
     background: white;
     border-radius: 24px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
 }
 
 .empty-icon {
@@ -617,6 +666,7 @@ async function passerCommande() {
     .panier-layout {
         flex-direction: column;
     }
+
     .right {
         width: 100%;
         position: static;

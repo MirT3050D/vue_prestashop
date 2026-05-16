@@ -43,13 +43,14 @@
               </span>
             </td>
             <td>
-              <select @change="onStatusChange(order.id, $event.target.value)" class="status-select"
+              <select v-if="!order.isCart" @change="onStatusChange(order.id, $event.target.value)" class="status-select"
                 :disabled="isUpdating[order.id]">
                 <option disabled selected>-- Changer --</option>
                 <option v-for="state in targetStates" :key="normalizeId(state.id)" :value="normalizeId(state.id)">
                   {{ getStatusName(state.id) }}
                 </option>
               </select>
+              <span v-else class="cart-label">Non modifiable</span>
               <span v-if="isUpdating[order.id]" class="mini-loader"></span>
             </td>
           </tr>
@@ -62,6 +63,7 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { getOrders, getOrderStates, updateOrderStatus } from '@/service/orderService';
+import { getCarts } from '@/service/cartService';
 import Loading from '@/components/Loading.vue';
 
 const orders = ref([]);
@@ -86,12 +88,30 @@ async function fetchData() {
   isLoading.value = true;
   error.value = null;
   try {
-    const [ordersData, statesData] = await Promise.all([getOrders(), getOrderStates()]);
+    const [ordersData, statesData, cartsData] = await Promise.all([
+      getOrders({ display: 'full' }),
+      getOrderStates(),
+      getCarts({ display: 'full' })
+    ]);
 
-    orders.value = ordersData.sort((a, b) => b.id - a.id); // Sort by most recent
-    console.log('ordersData (raw):', ordersData);
-    console.log('orders (sorted):', orders.value);
-    ordersData.forEach(o => console.log('order:', o.id, 'current_state:', o.current_state, 'type:', typeof o.current_state, o.current_state));
+    // Identifiants des paniers déjà convertis en commandes
+    const convertedCartIds = new Set(ordersData.map(o => normalizeId(o.id_cart)).filter(id => id && id !== '0'));
+
+    // Filtrer les paniers non convertis
+    const activeCarts = cartsData.filter(c => !convertedCartIds.has(normalizeId(c.id)));
+
+    // Normaliser les paniers pour le tableau
+    const normalizedCarts = activeCarts.map(c => ({
+      id: normalizeId(c.id),
+      reference: `PANIER #${normalizeId(c.id)}`,
+      id_customer: c.id_customer,
+      total_paid: 0, // Les paniers n'ont pas de total_paid direct dans l'API standard sans calcul
+      current_state: 'dans_le_panier',
+      isCart: true,
+      customer: c.customer || null
+    }));
+
+    orders.value = [...ordersData, ...normalizedCarts].sort((a, b) => b.id - a.id);
     orderStates.value = statesData;
 
     // Create mappings for quick lookup
@@ -129,11 +149,13 @@ async function fetchData() {
 }
 
 function getStatusName(stateId) {
+  if (stateId === 'dans_le_panier') return 'Dans le panier';
   const idKey = normalizeId(stateId);
   return stateNameMapping.value.get(idKey) || 'Inconnu';
 }
 
 function getStatusColor(stateId) {
+  if (stateId === 'dans_le_panier') return '#94a3b8'; // Gris ardoise pour les paniers
   const idKey = normalizeId(stateId);
   const color = stateColorMapping.value.get(idKey);
   return color || '#cccccc';
@@ -213,6 +235,12 @@ onMounted(fetchData);
   animation: spin 1s linear infinite;
   margin-left: 8px;
   vertical-align: middle;
+}
+
+.cart-label {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  font-style: italic;
 }
 
 @keyframes spin {

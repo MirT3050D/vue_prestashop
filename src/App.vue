@@ -110,6 +110,10 @@ onBeforeUnmount(() => {
             <Icon icon="lucide:user" />
             {{ customer.firstname || customer.email }}
           </span>
+          <RouterLink to="/" class="nav-item">
+            <Icon icon="lucide:users" />
+            Changer d'utilisateur
+          </RouterLink>
           <button class="nav-item logout-link" @click="logout">
             <Icon icon="lucide:log-out" />
             Déconnexion

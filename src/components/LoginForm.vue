@@ -6,13 +6,14 @@ const props = defineProps({
     loading: { type: Boolean, default: false },
     error: { type: String, default: '' },
     title: { type: String, default: 'Connexion' },
-    subtitle: { type: String, default: 'Veuillez vous connecter' }
+    subtitle: { type: String, default: 'Veuillez vous connecter' },
+    autocomplete: { type: String, default: 'on' }
 })
 
 const emit = defineEmits(['submit'])
 
-const email = ref('')
-const password = ref('')
+const email = ref(props.autocomplete === 'admin' ? 'admin' : '')
+const password = ref(props.autocomplete === 'admin' ? 'admin' : '')
 const showPassword = ref(false)
 
 function handleSubmit() {
@@ -51,6 +52,7 @@ function handleSubmit() {
                     type="text"
                     placeholder="Votre identifiant"
                     required
+                    :autocomplete="autocomplete === 'on' ? 'email' : autocomplete"
                     class="field-input"
                 />
             </div>
@@ -67,7 +69,7 @@ function handleSubmit() {
                         :type="showPassword ? 'text' : 'password'"
                         placeholder="Votre mot de passe"
                         required
-                        autocomplete="current-password"
+                        :autocomplete="autocomplete === 'on' ? 'current-password' : autocomplete"
                         class="field-input"
                     />
                     <button

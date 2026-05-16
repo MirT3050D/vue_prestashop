@@ -76,7 +76,7 @@ async function handleLogin(credentials) {
         emit('login-success');
 
         // 6. Rediriger vers l'accueil
-        router.push('/');
+        router.push('/catalogue');
 
     } catch (err) {
         console.error('Erreur lors de la connexion:', err);

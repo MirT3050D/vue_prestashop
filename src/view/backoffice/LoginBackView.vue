@@ -69,6 +69,7 @@ function handleLogin(credentials) {
                 :error="error" 
                 title="Espace Admin"
                 subtitle="Accès réservé au personnel autorisé"
+                autocomplete="admin"
                 @submit="handleLogin"
             />
             

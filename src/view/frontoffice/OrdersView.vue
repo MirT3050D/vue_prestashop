@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, customRef, onMounted, ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import Loading from '@/components/Loading.vue';
 import { getCustomerOrders, getOrderStates } from '@/service/orderService';
@@ -92,27 +92,36 @@ async function loadData() {
 
     loadCustomer();
 
-    if (!customer.value || !customer.value.id) {
-        orders.value = [];
+    if (!customer.value) {
         isLoading.value = false;
-        return;
+        return null;
     }
+    else {
 
-    try {
-        const [ordersData, statesData] = await Promise.all([
-            getCustomerOrders(customer.value.id),
-            getOrderStates()
-        ]);
 
-        orders.value = ordersData
-            .slice()
-            .sort((a, b) => Number(extractText(b.id)) - Number(extractText(a.id)));
-        orderStates.value = statesData;
-    } catch (e) {
-        console.error("Error loading orders:", e);
-        error.value = 'Impossible de charger vos commandes pour le moment.';
-    } finally {
-        isLoading.value = false;
+
+        if (!customer.value || !customer.value.id) {
+            orders.value = [];
+            isLoading.value = false;
+            return;
+        }
+
+        try {
+            const [ordersData, statesData] = await Promise.all([
+                getCustomerOrders(customer.value.id),
+                getOrderStates()
+            ]);
+
+            orders.value = ordersData
+                .slice()
+                .sort((a, b) => Number(extractText(b.id)) - Number(extractText(a.id)));
+            orderStates.value = statesData;
+        } catch (e) {
+            console.error("Error loading orders:", e);
+            error.value = 'Impossible de charger vos commandes pour le moment.';
+        } finally {
+            isLoading.value = false;
+        }
     }
 }
 
