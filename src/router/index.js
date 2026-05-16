@@ -12,9 +12,22 @@ import LoginFrontView from '@/view/frontoffice/LoginFrontView.vue'
 import CheckoutView from '@/view/frontoffice/CheckoutView.vue'
 import OrdersView from '@/view/frontoffice/OrdersView.vue'
 
+import UserSelectionView from '../view/frontoffice/UserSelectionView.vue'
+
 const router = createRouter({
   history: createWebHistory(),
-  routes: [{
+  routes: [
+  {
+    path: '/',
+    name: 'userSelection',
+    component: UserSelectionView
+  },
+  {
+    path: '/catalogue',
+    name: 'homeFrontoffice',
+    component: HomeView
+  },
+  {
     path: '/backofficeDashboard',
     name: 'dashboard',
     component: DashboardView,
@@ -49,11 +62,6 @@ const router = createRouter({
     name: 'login',
     component: LoginBackView,
     meta: { isBackoffice: true }
-  },
-  {
-    path: '/',
-    name: 'homeFrontoffice',
-    component: HomeView
   },
   {
     path: '/produit/:id',

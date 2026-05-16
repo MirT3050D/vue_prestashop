@@ -3,9 +3,15 @@ import { computed, ref } from 'vue';
 import { deleteXml, getXml } from '@/service/api';
 import { resetTargets as productResetTargets } from '@/service/resetTargets';
 import { resetDeclinaisonTargets } from '@/service/import';
-import { resetOrderTargets } from '@/service/orderImport';
 
-const resetTargets = [...productResetTargets, ...resetDeclinaisonTargets, ...resetOrderTargets];
+// Dédupliquer les targets par clé pour éviter les doublons
+const allTargets = [...resetDeclinaisonTargets, ...productResetTargets];
+const seenKeys = new Set();
+const resetTargets = allTargets.filter(t => {
+  if (seenKeys.has(t.key)) return false;
+  seenKeys.add(t.key);
+  return true;
+});
 
 function getDefaultSelectedKeys() {
   const keys = [];
@@ -101,10 +107,10 @@ function extractItemId(item) {
 async function fetchIdsForTarget(target) {
   const pageSize = 100;
   const uniqueIds = new Set();
-  let page = 1;
+  let offset = 0;
 
   while (true) {
-    const payload = await getXml(`${target.endpoint}?display=[id]&limit=${pageSize}&page=${page}`);
+    const payload = await getXml(`${target.endpoint}?display=[id]&limit=${offset},${pageSize}`);
     const items = getCollectionItems(payload, target);
 
     if (!items.length) {
@@ -122,7 +128,7 @@ async function fetchIdsForTarget(target) {
       break;
     }
 
-    page += 1;
+    offset += pageSize;
   }
 
   return [...uniqueIds];
@@ -139,8 +145,16 @@ async function resetTarget(target) {
   addLog('info', `${target.label}: ${ids.length} element(s) a supprimer.`);
 
   for (const id of ids) {
-    await deleteXml(`${target.endpoint}/${id}`);
-    addLog('success', `${target.label}: suppression de l'identifiant ${id}.`);
+    try {
+      await deleteXml(`${target.endpoint}/${id}`);
+      addLog('success', `${target.label}: suppression de l'identifiant ${id}.`);
+    } catch (e) {
+      if (e.response && e.response.status === 404) {
+        addLog('info', `${target.label}: l'identifiant ${id} est deja supprime.`);
+      } else {
+        addLog('error', `${target.label}: echec suppression ${id} (${e.message}).`);
+      }
+    }
   }
 }
 

@@ -1,9 +1,15 @@
 <script setup>
+
 import { onMounted, ref, computed } from 'vue';
 import ProductPanier from '@/components/frontoffice/ProductPanier.vue';
 import { Icon } from '@iconify/vue';
-import { getXml, postXml, getImage } from '@/service/api';
+import { getImage } from '@/service/api';
 import { calculateTtc, getProductTaxRate } from '@/service/price';
+import { getProduct } from '@/service/productService';
+import { createCart } from '@/service/cartService';
+import { createOrder, getOrderStates } from '@/service/orderService';
+import { getCustomerAddresses } from '@/service/addressService';
+import { getCustomer } from '@/service/customerService';
 import { useRouter } from 'vue-router';
 
 const router = useRouter();
@@ -32,10 +38,9 @@ async function loadCart() {
                     if (taxRate == null) {
                         taxRate = await getProductTaxRate(item.id_product);
                     }
-                    const productData = await getXml(`products/${item.id_product}`);
-                    const p = productData.prestashop.product;
-                    if (p.id_default_image) {
-                        let imgId = p.id_default_image;
+                    const product = await getProduct(item.id_product);
+                    if (product && product.id_default_image) {
+                        let imgId = product.id_default_image;
                         // Si c'est un objet (xlink), on prend l'ID
                         if (typeof imgId === 'object' && imgId['#text']) imgId = imgId['#text'];
                         if (typeof imgId === 'object' && imgId['@_xlink:href']) {
@@ -71,10 +76,8 @@ onMounted(() => {
 
 async function findCodStateId() {
     try {
-        const statesResp = await getXml('/order_states?display=full');
-        const statesNode = statesResp?.prestashop?.order_states?.order_state;
-        if (!statesNode) return;
-        const states = Array.isArray(statesNode) ? statesNode : [statesNode];
+        const states = await getOrderStates();
+        if (!states) return;
 
         for (let i = 0; i < states.length; i++) {
             const langNode = states[i].name?.language;
@@ -135,24 +138,24 @@ async function passerCommande() {
         return;
     }
 
-    let customer = null;
+    let customerData = null;
     try {
-        customer = JSON.parse(customerJson);
+        customerData = JSON.parse(customerJson);
     } catch (e) {
         message.value = 'Erreur lors de la lecture des données client.';
         messageType.value = 'error';
         return;
     }
 
-    if (!customer || !customer.id) {
+    if (!customerData || !customerData.id) {
         message.value = 'Informations client incomplètes. Veuillez vous reconnecter.';
         messageType.value = 'error';
         return;
     }
 
     try {
-        const customerResp = await getXml(`customers/${customer.id}?display=[secure_key]`);
-        secureKey.value = customerResp?.prestashop?.customer?.secure_key?.['#text'] || customerResp?.prestashop?.customer?.secure_key || '';
+        const customer = await getCustomer(customerData.id, 'display=[secure_key]');
+        secureKey.value = customer?.secure_key?.['#text'] || customer?.secure_key || '';
     } catch (e) {
         console.warn('Impossible de charger secure_key client:', e);
     }
@@ -164,15 +167,9 @@ async function passerCommande() {
         // 2. Récupérer l'adresse du client
         let idAdresse = 0;
         try {
-            let adresseData = await getXml(`addresses?display=full&filter[id_customer]=[${customer.id}]`);
-            if (adresseData && adresseData.prestashop && adresseData.prestashop.addresses) {
-                let adresses = adresseData.prestashop.addresses.address;
-                if (!Array.isArray(adresses)) {
-                    adresses = [adresses];
-                }
-                if (adresses.length > 0 && adresses[0].id) {
-                    idAdresse = adresses[0].id;
-                }
+            const adresses = await getCustomerAddresses(customerData.id);
+            if (adresses.length > 0 && adresses[0].id) {
+                idAdresse = adresses[0].id;
             }
         } catch (e) {
             console.log('Impossible de récupérer l\'adresse:', e);
@@ -207,7 +204,7 @@ async function passerCommande() {
   <cart>
     <id_currency>1</id_currency>
     <id_lang>1</id_lang>
-    <id_customer>${customer.id}</id_customer>
+    <id_customer>${customerData.id}</id_customer>
     <id_address_delivery>${idAdresse}</id_address_delivery>
     <id_address_invoice>${idAdresse}</id_address_invoice>
     <associations>
@@ -217,14 +214,10 @@ async function passerCommande() {
   </cart>
 </prestashop>`;
 
-        let cartResponse = await postXml('carts', cartXml);
+        let cartResponse = await createCart(cartXml);
 
         // Extraire l'id du panier créé
-        let idCart = 0;
-        if (cartResponse && cartResponse.prestashop && cartResponse.prestashop.cart) {
-            let cartData = cartResponse.prestashop.cart;
-            idCart = cartData.id || (cartData['@_id'] || 0);
-        }
+        let idCart = cartResponse?.id || (cartResponse?.['@_id'] || 0);
 
         if (!idCart) {
             message.value = 'Impossible de créer le panier PrestaShop. Veuillez réessayer.';
@@ -234,26 +227,25 @@ async function passerCommande() {
         }
 
         // 5. Créer la commande PrestaShop
-        // id_carrier = 1 (transporteur par défaut), id_payment = "free" pour les tests
-                const totalAmount = Number(totalPanier.value || 0).toFixed(6);
-                let orderRowsXml = '';
-                for (let i = 0; i < panier.value.length; i++) {
-                        let item = panier.value[i];
-                        let idProduct = item.id_product;
-                        let idAttribute = item.id_product_attribute || 0;
-                        let qty = item.quantity;
-                        orderRowsXml += `
-                <order_row>
-                    <product_id>${idProduct}</product_id>
-                    <product_attribute_id>${idAttribute}</product_attribute_id>
-                    <product_quantity>${qty}</product_quantity>
-                </order_row>`;
-                }
+        const totalAmount = Number(totalPanier.value || 0).toFixed(6);
+        let orderRowsXml = '';
+        for (let i = 0; i < panier.value.length; i++) {
+                let item = panier.value[i];
+                let idProduct = item.id_product;
+                let idAttribute = item.id_product_attribute || 0;
+                let qty = item.quantity;
+                orderRowsXml += `
+        <order_row>
+            <product_id>${idProduct}</product_id>
+            <product_attribute_id>${idAttribute}</product_attribute_id>
+            <product_quantity>${qty}</product_quantity>
+        </order_row>`;
+        }
         let orderXml = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
   <order>
     <id_cart>${idCart}</id_cart>
-    <id_customer>${customer.id}</id_customer>
+    <id_customer>${customerData.id}</id_customer>
     <id_address_delivery>${idAdresse}</id_address_delivery>
     <id_address_invoice>${idAdresse}</id_address_invoice>
     <id_carrier>1</id_carrier>
@@ -290,14 +282,10 @@ async function passerCommande() {
   </order>
 </prestashop>`;
 
-        let orderResponse = await postXml('orders', orderXml);
+        let orderResponse = await createOrder(orderXml);
 
         // Extraire l'id de la commande créée
-        let idOrder = 0;
-        if (orderResponse && orderResponse.prestashop && orderResponse.prestashop.order) {
-            let orderData = orderResponse.prestashop.order;
-            idOrder = orderData.id || (orderData['@_id'] || 0);
-        }
+        let idOrder = orderResponse?.id || (orderResponse?.['@_id'] || 0);
 
         if (idOrder) {
             // 6. Succès — vider le panier et afficher le message

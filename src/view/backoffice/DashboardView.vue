@@ -1,7 +1,10 @@
 <script setup>
+
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from 'vue';
 import { Chart, registerables } from 'chart.js';
-import { api } from '@/service/api';
+import { getOrders } from '@/service/orderService';
+import { getCustomers } from '@/service/customerService';
+import { getStockAvailables } from '@/service/stockService';
 
 Chart.register(...registerables);
 
@@ -40,6 +43,15 @@ const STATUS_MAP = {
 };
 
 // --- FONCTIONS UTILITAIRES ---
+
+function extractText(v) {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'object') {
+        return String(v['#text'] || '');
+    }
+    return String(v);
+}
+
 function toNumber(v) {
     if (v === null || v === undefined || v === '') return 0;
     const n = String(v).replace(',', '.');
@@ -68,7 +80,9 @@ function getIntervalKey(dateString) {
 // --- LOGIQUE DE FILTRAGE ---
 const filteredOrders = computed(() => {
   return rawOrders.value.filter(o => {
-    const d = o.date_add.slice(0, 10);
+    const dateStr = extractText(o.date_add);
+    if (!dateStr) return false;
+    const d = dateStr.slice(0, 10);
     return (!startDate.value || d >= startDate.value) && (!endDate.value || d <= endDate.value);
   });
 });
@@ -80,11 +94,12 @@ const topProducts = computed(() => {
     const rows = order.associations?.order_rows || [];
     const normalizedRows = Array.isArray(rows) ? rows : [rows];
     for (const item of normalizedRows) {
-        if (!item.product_id) continue;
-        const current = productMap.get(item.product_id) || { name: item.product_name, qty: 0, revenue: 0 };
+        const productId = extractText(item?.product_id);
+        if (!productId) continue;
+        const current = productMap.get(productId) || { name: extractText(item.product_name), qty: 0, revenue: 0 };
         current.qty += toNumber(item.product_quantity);
         current.revenue += toNumber(item.unit_price_tax_incl) * toNumber(item.product_quantity);
-        productMap.set(item.product_id, current);
+        productMap.set(productId, current);
     }
   }
   return [...productMap.entries()]
@@ -96,11 +111,13 @@ const topProducts = computed(() => {
 // --- ANALYSE CLIENTS ---
 const customerStats = computed(() => {
   const periodCustomers = rawCustomers.value.filter(c => {
-    const d = c.date_add.slice(0, 10);
+    const dateStr = extractText(c.date_add);
+    if (!dateStr) return false;
+    const d = dateStr.slice(0, 10);
     return (!startDate.value || d >= startDate.value) && (!endDate.value || d <= endDate.value);
   }).length;
   const totalOrders = filteredOrders.value.length;
-  const uniqueCustomers = new Set(filteredOrders.value.map(o => o.id_customer)).size;
+  const uniqueCustomers = new Set(filteredOrders.value.map(o => extractText(o.id_customer))).size;
   const repeatRate = uniqueCustomers > 0 ? ((totalOrders - uniqueCustomers) / totalOrders) * 100 : 0;
   return { newAccounts: periodCustomers, loyaltyRate: repeatRate.toFixed(1) };
 });
@@ -109,7 +126,7 @@ const customerStats = computed(() => {
 const groupedRows = computed(() => {
   const map = new Map();
   for (const o of filteredOrders.value) {
-    const key = getIntervalKey(o.date_add);
+    const key = getIntervalKey(extractText(o.date_add));
     if (!key) continue;
     const amt = toNumber(o.total_paid_tax_incl);
     const curr = map.get(key) || { key, orderCount: 0, totalAmount: 0 };
@@ -131,7 +148,7 @@ const summary = computed(() => {
 const statusDistribution = computed(() => {
   const stats = {};
   for (const o of filteredOrders.value) {
-    const stId = o.current_state || 'default';
+    const stId = extractText(o.current_state) || 'default';
     const label = STATUS_MAP[stId]?.label || STATUS_MAP.default.label;
     stats[label] = (stats[label] || 0) + 1;
   }
@@ -141,45 +158,55 @@ const statusDistribution = computed(() => {
   });
 });
 
+
 // --- APPELS API ---
 async function fetchData() {
   isLoading.value = true;
   error.value = '';
   try {
-    const orderRes = await api.get('/orders', { params: { display: 'full' } });
-    const oData = orderRes.data?.orders?.order || orderRes.data?.orders || [];
-    rawOrders.value = Array.isArray(oData) ? oData : [oData];
+    const oData = await getOrders({ display: 'full' });
+    rawOrders.value = oData;
 
     if (rawOrders.value.length > 0 && !startDate.value) {
-        const sorted = [...rawOrders.value].sort((a,b) => a.date_add.localeCompare(b.date_add));
-        startDate.value = sorted[0].date_add.slice(0, 10);
-        endDate.value = sorted[sorted.length - 1].date_add.slice(0, 10);
+        const sorted = [...rawOrders.value]
+            .filter(o => extractText(o.date_add))
+            .sort((a,b) => extractText(a.date_add).localeCompare(extractText(b.date_add)));
+        
+        if (sorted.length > 0) {
+            startDate.value = extractText(sorted[0].date_add).slice(0, 10);
+            endDate.value = extractText(sorted[sorted.length - 1].date_add).slice(0, 10);
+        }
     }
 
-    const custRes = await api.get('/customers', { params: { display: '[id,date_add]' } });
-    const cData = custRes.data?.customers?.customer || custRes.data?.customers || [];
-    rawCustomers.value = Array.isArray(cData) ? cData : [cData];
+    const cData = await getCustomers({ display: '[id,date_add]' });
+    rawCustomers.value = cData;
 
-    const stockRes = await api.get('/stock_availables', {
-        params: { display: '[id_product,quantity]', 'filter[quantity]': '[0,10]', limit: '8', sort: '[quantity_ASC]' }
+    const stockRaw = await getStockAvailables({
+        display: '[id_product,quantity]',
+        'filter[quantity]': '[0,10]',
+        limit: '8',
+        sort: '[quantity_ASC]'
     });
-    const sData = stockRes.data?.stock_availables?.stock_available || stockRes.data?.stock_availables || [];
-    const stockRaw = Array.isArray(sData) ? sData : [sData];
     
     stockAlerts.value = stockRaw.map(s => {
-        const found = rawOrders.value.find(o => 
-            (Array.isArray(o.associations?.order_rows) ? o.associations.order_rows : [o.associations?.order_rows])
-            .some(row => row?.product_id == s.id_product)
-        );
-        let name = "Produit #" + s.id_product;
+        const targetProductId = extractText(s.id_product);
+        const found = rawOrders.value.find(o => {
+            const rows = o.associations?.order_rows;
+            const normalizedRows = Array.isArray(rows) ? rows : (rows ? [rows] : []);
+            return normalizedRows.some(row => extractText(row?.product_id) == targetProductId);
+        });
+        
+        let name = "Produit #" + targetProductId;
         if (found) {
-            const row = (Array.isArray(found.associations.order_rows) ? found.associations.order_rows : [found.associations.order_rows])
-                        .find(r => r?.product_id == s.id_product);
-            name = row?.product_name || name;
+            const rows = found.associations?.order_rows;
+            const normalizedRows = Array.isArray(rows) ? rows : (rows ? [rows] : []);
+            const row = normalizedRows.find(r => extractText(r?.product_id) == targetProductId);
+            name = extractText(row?.product_name) || name;
         }
         return { ...s, name };
     });
   } catch (err) {
+    console.error("Error fetching dashboard data:", err);
     error.value = 'Erreur de chargement.';
   } finally {
     isLoading.value = false;

@@ -1,11 +1,13 @@
 <script setup>
-const props = defineProps(['image', 'name', 'price', 'promo']) 
+const props = defineProps(['image', 'name', 'price', 'promo', 'badge']) 
 </script>
 <template>
     <div class="product-card">
         <div class="image-container">
             <img :src="image" :alt="name">
             <span v-if="promo !== null" class="promo-badge">{{ promo }}</span>
+            <!-- Nouveau Badge HOT/NEW -->
+            <span v-if="badge" :class="['status-badge', badge.toLowerCase()]">{{ badge }}</span>
         </div>
         <div class="product-info">
             <h3 class="product-name">{{ name }}</h3>
@@ -63,6 +65,27 @@ const props = defineProps(['image', 'name', 'price', 'promo'])
     padding: 6px 12px;
     border-radius: 20px;
     box-shadow: 0 2px 8px rgba(255, 71, 87, 0.4);
+}
+
+.status-badge {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    color: white;
+    font-size: 0.75rem;
+    font-weight: 800;
+    padding: 4px 10px;
+    border-radius: 6px;
+    text-transform: uppercase;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.status-badge.hot {
+    background: linear-gradient(135deg, #ff4757 0%, #ff6b81 100%);
+}
+
+.status-badge.new {
+    background: linear-gradient(135deg, #2ed573 0%, #7bed9f 100%);
 }
 
 .product-info {

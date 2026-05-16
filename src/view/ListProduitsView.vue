@@ -1,7 +1,8 @@
 <script setup>
+
 import List from '@/components/List.vue';
 import Loading from '@/components/Loading.vue';
-import { getXml } from '@/service/api';
+import { getProducts } from '@/service/productService';
 import { getColumnForList } from '@/service/util';
 import { ref, onMounted } from 'vue';
 
@@ -61,13 +62,16 @@ function formatProduct(product) {
     };
 }
 
+
 onMounted(async () => {
     loading.value = true;
     try {
         product_columns.value = getColumnForList('product');
-        raw_data.value = await getXml('/products?display=full');
-        raw_data.value = raw_data.value.prestashop.products.product ?? [];
+        raw_data.value = await getProducts('display=full');
         data.value = raw_data.value.map(formatProduct);
+    } catch (err) {
+        console.error("Error loading products:", err);
+        data.value = [];
     } finally {
         loading.value = false;
     }

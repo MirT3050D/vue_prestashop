@@ -193,3 +193,9 @@ export async function postImage(url, imageFile) {
   });
   return parseResponseData(response.data);
 }
+
+export async function getPrestaShopConfig(name) {
+  const response = await getXml(`/configurations?display=full&filter[name]=[${name}]`);
+  const config = response?.prestashop?.configurations?.configuration;
+  return Array.isArray(config) ? config[0] : config;
+}

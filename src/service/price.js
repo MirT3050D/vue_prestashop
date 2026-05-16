@@ -1,12 +1,39 @@
+
 import { getXml } from '@/service/api';
 
 const cache = new Map();
+
+/**
+ * Normalizes PrestaShop resource nodes to always return an array.
+ */
+function normalizeArray(node, singularKey) {
+    if (!node || node === '') return [];
+    const list = node[singularKey];
+    if (!list) return [];
+    return Array.isArray(list) ? list : [list];
+}
 
 function getNodeText(value) {
     if (value == null) return null;
     if (typeof value === 'string' || typeof value === 'number') return value;
     if (typeof value === 'object') return value['#text'] ?? null;
     return null;
+}
+
+/**
+ * Fetches all taxes.
+ */
+export async function getTaxes(params = 'display=full') {
+    const response = await getXml(`/taxes?${params}`);
+    return normalizeArray(response?.prestashop?.taxes, 'tax');
+}
+
+/**
+ * Fetches all tax rules.
+ */
+export async function getTaxRules(params = 'display=full') {
+    const response = await getXml(`/tax_rules?${params}`);
+    return normalizeArray(response?.prestashop?.tax_rules, 'tax_rule');
 }
 
 async function getTaxRateForGroup(taxRulesGroupId) {
@@ -17,9 +44,7 @@ async function getTaxRateForGroup(taxRulesGroupId) {
     if (cached != null) return cached;
 
     try {
-        const rulesResp = await getXml(`/tax_rules?filter[id_tax_rules_group]=[${taxRulesGroupId}]&display=[id,id_tax]`);
-        const rulesNode = rulesResp?.prestashop?.tax_rules?.tax_rule;
-        const rules = Array.isArray(rulesNode) ? rulesNode : (rulesNode ? [rulesNode] : []);
+        const rules = await getTaxRules(`filter[id_tax_rules_group]=[${taxRulesGroupId}]&display=[id,id_tax]`);
         if (rules.length === 0) return 0;
 
         const taxId = getNodeText(rules[0].id_tax);
@@ -55,4 +80,4 @@ export function calculateTtc(priceHt, taxRate = 0) {
     const base = Number(priceHt) || 0;
     const rate = Number(taxRate) || 0;
     return Math.round(base * (1 + rate / 100) * 100) / 100;
-}
+}

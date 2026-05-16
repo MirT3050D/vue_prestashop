@@ -41,10 +41,10 @@ export function extractItemId(item) {
 export async function fetchIdsForTarget(target) {
   const pageSize = 100;
   const uniqueIds = new Set();
-  let page = 1;
+  let offset = 0;
 
   while (true) {
-    const payload = await getXml(`${target.endpoint}?display=[id]&limit=${pageSize}&page=${page}`);
+    const payload = await getXml(`${target.endpoint}?display=[id]&limit=${offset},${pageSize}`);
     const items = getCollectionItems(payload, target);
 
     if (!items.length) {
@@ -62,7 +62,7 @@ export async function fetchIdsForTarget(target) {
       break;
     }
 
-    page += 1;
+    offset += pageSize;
   }
 
   return [...uniqueIds];
@@ -86,7 +86,7 @@ export async function resetTarget(target, logCallback = () => {}) {
       if (e.response && e.response.status === 404) {
         logCallback('info', `${target.label}: l'identifiant ${id} est deja supprime.`);
       } else {
-        throw e;
+        logCallback('error', `${target.label}: Erreur lors de la suppression de l'identifiant ${id} (${e.message}).`);
       }
     }
   }

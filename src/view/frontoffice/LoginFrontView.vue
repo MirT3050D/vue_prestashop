@@ -1,8 +1,10 @@
 <script setup>
+
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import LoginForm from '@/components/LoginForm.vue';
-import { getXml, postXml } from '@/service/api';
+import { loginFront } from '@/service/authService';
+import { getCustomers } from '@/service/customerService';
 
 const emit = defineEmits(['login-success']);
 const router = useRouter();
@@ -14,36 +16,10 @@ async function handleLogin(credentials) {
     error.value = '';
 
     try {
-        // 1. Appel POST vers PrestaShop front-office authentication
-        const formData = new URLSearchParams();
-        formData.append('email', credentials.email);
-        formData.append('password', credentials.password);
-        formData.append('submitLogin', '1');
-
-        const loginResponse = await postXml(
-            '/ps_front/index.php?controller=authentication',
-            formData.toString(),
-            {
-                skipXmlDefaults: true,
-                skipAuth: true,
-                skipBaseUrl: true,
-                skipApiParams: true,
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    Accept: 'text/html'
-                },
-                // On suit les redirections mais on veut la réponse complète
-                maxRedirects: 5,
-                validateStatus: function (status) {
-                    return status >= 200 && status < 400;
-                },
-                params: {}
-            }
-        );
+        // 1. Appel vers authService
+        const loginResponse = await loginFront(credentials.email, credentials.password);
 
         // 2. Vérifier si le login a réussi
-        // PrestaShop redirige vers "my-account" en cas de succès
-        // ou reste sur "authentication" en cas d'erreur
         const responseText = typeof loginResponse.data === 'string' ? loginResponse.data : '';
         const isLoginFailed = responseText.includes('authentication') && responseText.includes('alert-danger');
 
@@ -56,40 +32,31 @@ async function handleLogin(credentials) {
         // 3. Récupérer les informations du customer via le WebService API
         let customerData = null;
         try {
-            const customersResponse = await getXml(
-                `customers?display=full&filter[email]=[${credentials.email}]`
-            );
+            const customers = await getCustomers(`display=full&filter[email]=[${credentials.email}]`);
 
-            if (customersResponse && customersResponse.prestashop && customersResponse.prestashop.customers) {
-                let customers = customersResponse.prestashop.customers.customer;
-                if (!Array.isArray(customers)) {
-                    customers = [customers];
-                }
+            if (customers.length > 0) {
+                let c = customers[0];
 
-                if (customers.length > 0) {
-                    let c = customers[0];
-
-                    // Extraire les textes des champs langue si nécessaire
-                    function extractText(field) {
-                        if (!field) return '';
-                        if (typeof field === 'string') return field;
-                        if (field.language) {
-                            if (Array.isArray(field.language)) return field.language[0]['#text'] || '';
-                            return field.language['#text'] || '';
-                        }
-                        return field['#text'] || String(field);
+                // Extraire les textes des champs langue si nécessaire
+                function extractText(field) {
+                    if (!field) return '';
+                    if (typeof field === 'string') return field;
+                    if (field.language) {
+                        if (Array.isArray(field.language)) return field.language[0]['#text'] || '';
+                        return field.language['#text'] || '';
                     }
-
-                    customerData = {
-                        id: c.id,
-                        email: extractText(c.email) || credentials.email,
-                        firstname: extractText(c.firstname),
-                        lastname: extractText(c.lastname),
-                        id_gender: c.id_gender,
-                        birthday: extractText(c.birthday),
-                        active: c.active
-                    };
+                    return field['#text'] || String(field);
                 }
+
+                customerData = {
+                    id: c.id,
+                    email: extractText(c.email) || credentials.email,
+                    firstname: extractText(c.firstname),
+                    lastname: extractText(c.lastname),
+                    id_gender: c.id_gender,
+                    birthday: extractText(c.birthday),
+                    active: c.active
+                };
             }
         } catch (apiError) {
             console.log('Impossible de récupérer les infos client via WebService:', apiError);

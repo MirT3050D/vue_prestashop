@@ -1,16 +1,23 @@
 
-import { getXml, postXml } from '@/service/api';
+import { getXml, postXml, putXml, deleteXml } from '@/service/api';
+
+/**
+ * Normalizes PrestaShop resource nodes to always return an array.
+ */
+function normalizeArray(node, singularKey) {
+    if (!node || node === '') return [];
+    const list = node[singularKey];
+    if (!list) return [];
+    return Array.isArray(list) ? list : [list];
+}
 
 /**
  * Fetches all orders from the PrestaShop API.
  */
-export async function getOrders() {
-    const response = await getXml('/orders?display=full');
-    if (!response?.prestashop?.orders?.order) {
-        return [];
-    }
-    let orders = response.prestashop.orders.order;
-    return Array.isArray(orders) ? orders : [orders];
+export async function getOrders(params = 'display=full') {
+    const query = typeof params === 'object' ? new URLSearchParams(params).toString() : params;
+    const response = await getXml(`/orders${query ? '?' + query : ''}`);
+    return normalizeArray(response?.prestashop?.orders, 'order');
 }
 
 /**
@@ -19,17 +26,40 @@ export async function getOrders() {
  * @param {string|number} customerId The customer identifier.
  */
 export async function getCustomerOrders(customerId) {
-    if (!customerId) {
-        return [];
-    }
+    if (!customerId) return [];
+    return await getOrders(`display=full&filter[id_customer]=[${customerId}]`);
+}
 
-    const response = await getXml(`/orders?display=full&filter[id_customer]=[${customerId}]`);
-    if (!response?.prestashop?.orders?.order) {
-        return [];
-    }
+/**
+ * Fetches a single order.
+ */
+export async function getOrder(id, params = '') {
+    const query = typeof params === 'object' ? new URLSearchParams(params).toString() : params;
+    const response = await getXml(`/orders/${id}${query ? '?' + query : ''}`);
+    return response?.prestashop?.order || null;
+}
 
-    let orders = response.prestashop.orders.order;
-    return Array.isArray(orders) ? orders : [orders];
+/**
+ * Creates a new order.
+ */
+export async function createOrder(payload) {
+    const response = await postXml('/orders', payload);
+    return response?.prestashop?.order || response;
+}
+
+/**
+ * Updates an order.
+ */
+export async function updateOrder(id, payload) {
+    const response = await putXml(`/orders/${id}`, payload);
+    return response?.prestashop?.order || response;
+}
+
+/**
+ * Deletes an order.
+ */
+export async function deleteOrder(id) {
+    return await deleteXml(`/orders/${id}`);
 }
 
 /**
@@ -37,11 +67,7 @@ export async function getCustomerOrders(customerId) {
  */
 export async function getOrderStates() {
     const response = await getXml('/order_states?display=full');
-    if (!response?.prestashop?.order_states?.order_state) {
-        return [];
-    }
-    let states = response.prestashop.order_states.order_state;
-    return Array.isArray(states) ? states : [states];
+    return normalizeArray(response?.prestashop?.order_states, 'order_state');
 }
 
 /**
@@ -64,11 +90,7 @@ export async function updateOrderStatus(orderId, newStateId) {
 }
 
 /**
- * Updates order status using order history creation.
- * This is the native PrestaShop workflow and avoids full order PUT issues.
- *
- * @param {string} orderId The ID of the order to update.
- * @param {string} newStateId The target order state ID.
+ * Alias for updateOrderStatus.
  */
 export async function updateOrderStatusByHistory(orderId, newStateId) {
     return await updateOrderStatus(orderId, newStateId);

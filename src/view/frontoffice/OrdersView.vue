@@ -85,6 +85,7 @@ function getOrderStateColor(stateId) {
     return stateColors.value.get(String(extractText(stateId))) || '#9ca3af';
 }
 
+
 async function loadData() {
     isLoading.value = true;
     error.value = '';
@@ -108,6 +109,7 @@ async function loadData() {
             .sort((a, b) => Number(extractText(b.id)) - Number(extractText(a.id)));
         orderStates.value = statesData;
     } catch (e) {
+        console.error("Error loading orders:", e);
         error.value = 'Impossible de charger vos commandes pour le moment.';
     } finally {
         isLoading.value = false;
@@ -164,7 +166,8 @@ onMounted(loadData);
             <article v-for="order in orders" :key="extractText(order.id)" class="order-card">
                 <div class="order-head">
                     <div>
-                        <p class="order-reference">Commande #{{ extractText(order.reference) || extractText(order.id) }}</p>
+                        <p class="order-reference">Commande #{{ extractText(order.reference) || extractText(order.id) }}
+                        </p>
                         <p class="order-date">Passée le {{ formatDate(order.date_add) }}</p>
                     </div>
                     <span class="order-badge" :style="{ backgroundColor: getOrderStateColor(order.current_state) }">
@@ -334,7 +337,7 @@ onMounted(loadData);
     gap: 14px;
 }
 
-.order-meta > div {
+.order-meta>div {
     padding: 14px;
     border-radius: 16px;
     background: #f8fafc;
@@ -354,6 +357,7 @@ onMounted(loadData);
 }
 
 @media (max-width: 768px) {
+
     .hero-card,
     .order-head {
         flex-direction: column;

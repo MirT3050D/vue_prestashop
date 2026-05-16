@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue';
-import { getXml, getImage, postXml } from '@/service/api';
+import { getImage } from '@/service/api';
+import { getProduct, getCombinations, getProductOptionValues, getProductOptions } from '@/service/productService';
 import { getProductTaxRate } from '@/service/price';
 import Loading from '@/components/Loading.vue';
 import { useRoute } from 'vue-router';
@@ -93,19 +94,12 @@ onMounted(async () => {
         const id = route.params.id;
 
         // Récupération des données du produit
-        const data = await getXml(`products/${id}`);
-        product.value = data["prestashop"]["product"];
+        product.value = await getProduct(id);
         productTaxRate.value = await getProductTaxRate(id);
 
         // Récupération de toutes les combinaisons du produit pour les images dynamiques
         try {
-            const combData = await getXml(`combinations?display=full&filter[id_product]=[${id}]`);
-            if (combData && combData.prestashop && combData.prestashop.combinations) {
-                let combsContainer = combData.prestashop.combinations;
-                let combs = combsContainer.combination || combsContainer;
-                if (!Array.isArray(combs)) combs = [combs];
-                productCombinations.value = combs;
-            }
+            productCombinations.value = await getCombinations(id);
         } catch (e) {
             console.log("Erreur lors de la récupération des combinaisons", e);
         }
@@ -146,25 +140,18 @@ onMounted(async () => {
                 if (!Array.isArray(optionValueIds)) optionValueIds = [optionValueIds];
 
                 // On s'assure qu'on a bien des objets avec un id
-                let validOptionValueIds = [];
                 let idsArray = [];
                 for (let i = 0; i < optionValueIds.length; i++) {
                     let v = optionValueIds[i];
                     if (v && v.id) {
-                        validOptionValueIds.push(v);
                         idsArray.push(v.id);
                     }
                 }
-                optionValueIds = validOptionValueIds;
 
                 const ids = idsArray.join('|');
                 if (ids) {
-                    const valuesData = await getXml(`product_option_values?display=full&filter[id]=[${ids}]`);
-                    if (valuesData && valuesData.prestashop && valuesData.prestashop.product_option_values) {
-                        let valuesContainer = valuesData.prestashop.product_option_values;
-                        let values = valuesContainer.product_option_value || valuesContainer;
-                        if (!Array.isArray(values)) values = [values];
-
+                    const values = await getProductOptionValues(ids);
+                    if (values.length > 0) {
                         let groupIdsArray = [];
                         for (let i = 0; i < values.length; i++) {
                             let rawGroupId = values[i].id_attribute_group;
@@ -176,12 +163,8 @@ onMounted(async () => {
 
                         const groupIds = groupIdsArray.join('|');
                         if (groupIds) {
-                            const groupsData = await getXml(`product_options?display=full&filter[id]=[${groupIds}]`);
-                            if (groupsData && groupsData.prestashop && groupsData.prestashop.product_options) {
-                                let groupsContainer = groupsData.prestashop.product_options;
-                                let groups = groupsContainer.product_option || groupsContainer;
-                                if (!Array.isArray(groups)) groups = [groups];
-
+                            const groups = await getProductOptions(groupIds);
+                            if (groups.length > 0) {
                                 // Construction de l'objet variants avec des boucles classiques
                                 let allVariants = [];
                                 for (let i = 0; i < groups.length; i++) {
@@ -365,37 +348,6 @@ function putInCart() {
 
     localStorage.setItem("panier", JSON.stringify(cart));
     alert("Produit ajouté au panier !");
-}
-
-async function createCart(customerId, productId, quantity = 1, productAttributeId = 0) {
-    const payload = `<?xml version="1.0" encoding="UTF-8"?>
-<prestashop>
-  <cart>
-    <id_currency>1</id_currency>
-    <id_lang>1</id_lang>
-    <id_customer>${customerId}</id_customer>
-    <id_address_delivery>1</id_address_delivery>
-    <id_address_invoice>1</id_address_invoice>
-    <associations>
-      <cart_rows>
-        <cart_row>
-          <id_product>${productId}</id_product>
-          <id_product_attribute>${productAttributeId}</id_product_attribute>
-          <quantity>${quantity}</quantity>
-        </cart_row>
-      </cart_rows>
-    </associations>
-  </cart>
-</prestashop>`
-
-    try {
-        const result = await postXml('/api/carts', payload)
-        console.log('Cart créé :', result)
-        return result
-    } catch (error) {
-        console.error('Erreur création cart :', error.response?.data || error.message)
-        throw error
-    }
 }
 
 </script>

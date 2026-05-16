@@ -1,9 +1,14 @@
 <script setup>
+
 import { ref, onMounted, computed } from 'vue';
 import { Icon } from '@iconify/vue';
-import { getXml, postXml, getImage } from '@/service/api';
+import { getImage } from '@/service/api';
 import { calculateTtc, getProductTaxRate } from '@/service/price';
-import { updateOrderStatusByHistory } from '@/service/orderService';
+import { getProduct } from '@/service/productService';
+import { getCustomerAddresses, createAddress } from '@/service/addressService';
+import { createCart } from '@/service/cartService';
+import { createOrder, getOrderStates, updateOrderStatusByHistory, getOrder } from '@/service/orderService';
+import { getPrestaShopConfig } from '@/service/api';
 import { useRouter } from 'vue-router';
 
 const router = useRouter();
@@ -27,10 +32,9 @@ async function enrichCartItem(item) {
     }
 
     try {
-        const productData = await getXml(`products/${item.id_product}`);
-        const p = productData.prestashop.product;
-        if (p.id_default_image) {
-            let imgId = p.id_default_image;
+        const product = await getProduct(item.id_product);
+        if (product && product.id_default_image) {
+            let imgId = product.id_default_image;
             if (typeof imgId === 'object' && imgId['#text']) imgId = imgId['#text'];
             if (typeof imgId === 'object' && imgId['@_xlink:href']) {
                  imgId = imgId['@_xlink:href'].split('/').pop();
@@ -87,22 +91,16 @@ const totalPanier = computed(() => {
  */
 async function findCodStateId() {
     try {
-        const configResp = await getXml('/configurations?display=full&filter[name]=[PS_OS_COD_VALIDATION]');
-        const configNode = configResp?.prestashop?.configurations?.configuration;
-        if (configNode) {
-            const config = Array.isArray(configNode) ? configNode[0] : configNode;
-            const configuredStateId = Number(extractText(config?.value));
-            if (configuredStateId > 0) {
-                codStateId.value = configuredStateId;
-                console.log('[checkout] COD state id from configuration:', codStateId.value);
-                return;
-            }
+        const config = await getPrestaShopConfig('PS_OS_COD_VALIDATION');
+        const configuredStateId = Number(extractText(config?.value));
+        if (configuredStateId > 0) {
+            codStateId.value = configuredStateId;
+            console.log('[checkout] COD state id from configuration:', codStateId.value);
+            return;
         }
 
-        const statesResp = await getXml('/order_states?display=full');
-        const statesNode = statesResp?.prestashop?.order_states?.order_state;
-        if (!statesNode) return;
-        const states = Array.isArray(statesNode) ? statesNode : [statesNode];
+        const states = await getOrderStates();
+        if (!states) return;
 
         for (let i = 0; i < states.length; i++) {
             const moduleName = extractText(states[i].module_name).toLowerCase();
@@ -174,20 +172,16 @@ onMounted(async () => {
 
     // Tenter de récupérer une adresse existante
     try {
-        const adresseData = await getXml(`addresses?display=full&filter[id_customer]=[${customer.value.id}]`);
-        if (adresseData && adresseData.prestashop && adresseData.prestashop.addresses) {
-            let adresses = adresseData.prestashop.addresses.address;
-            if (!Array.isArray(adresses)) adresses = [adresses];
-            if (adresses.length > 0) {
-                const a = adresses[0];
-                form.value.firstname = a.firstname || form.value.firstname;
-                form.value.lastname = a.lastname || form.value.lastname;
-                form.value.address1 = a.address1 || '';
-                form.value.postcode = a.postcode || '';
-                form.value.city = a.city || '';
-                form.value.phone = a.phone || '';
-                form.value.alias = a.alias || 'Mon adresse';
-            }
+        const adresses = await getCustomerAddresses(customer.value.id);
+        if (adresses.length > 0) {
+            const a = adresses[0];
+            form.value.firstname = a.firstname || form.value.firstname;
+            form.value.lastname = a.lastname || form.value.lastname;
+            form.value.address1 = a.address1 || '';
+            form.value.postcode = a.postcode || '';
+            form.value.city = a.city || '';
+            form.value.phone = a.phone || '';
+            form.value.alias = a.alias || 'Mon adresse';
         }
     } catch (e) {
         console.log('Pas d\'adresse existante:', e);
@@ -220,12 +214,8 @@ async function passerCommande() {
 
         // Chercher une adresse existante
         try {
-            let adresseData = await getXml(`addresses?display=full&filter[id_customer]=[${customer.value.id}]`);
-            if (adresseData && adresseData.prestashop && adresseData.prestashop.addresses) {
-                let adresses = adresseData.prestashop.addresses.address;
-                if (!Array.isArray(adresses)) adresses = [adresses];
-                if (adresses.length > 0 && adresses[0].id) idAdresse = adresses[0].id;
-            }
+            const adresses = await getCustomerAddresses(customer.value.id);
+            if (adresses.length > 0 && adresses[0].id) idAdresse = adresses[0].id;
         } catch (e) {}
 
         // Créer une nouvelle adresse si aucune trouvée
@@ -244,10 +234,8 @@ async function passerCommande() {
     <phone>${form.value.phone}</phone>
   </address>
 </prestashop>`;
-            let adresseResp = await postXml('addresses', adresseXml);
-            if (adresseResp && adresseResp.prestashop && adresseResp.prestashop.address) {
-                idAdresse = adresseResp.prestashop.address.id || 0;
-            }
+            let adresseResp = await createAddress(adresseXml);
+            idAdresse = adresseResp?.id || 0;
         }
 
         if (!idAdresse) {
@@ -284,12 +272,9 @@ async function passerCommande() {
   </cart>
 </prestashop>`;
 
-        let cartResp = await postXml('carts', cartXml);
+        let cartResp = await createCart(cartXml);
         console.log('[checkout] cart response:', cartResp);
-        let idCart = 0;
-        if (cartResp && cartResp.prestashop && cartResp.prestashop.cart) {
-            idCart = cartResp.prestashop.cart.id || 0;
-        }
+        let idCart = cartResp?.id || 0;
 
         if (!idCart) {
             error.value = 'Impossible de créer le panier. Veuillez réessayer.';
@@ -351,17 +336,16 @@ async function passerCommande() {
 </prestashop>`;
 
         console.log('[checkout] order payload:', orderXml);
-        let orderResp = await postXml('orders', orderXml);
+        let orderResp = await createOrder(orderXml);
         console.log('[checkout] order response:', orderResp);
-        if (orderResp && orderResp.prestashop && orderResp.prestashop.order) {
-            idOrder.value = extractText(orderResp.prestashop.order.id) || '?';
-            const responseState = Number(extractText(orderResp.prestashop.order.current_state));
+        if (orderResp) {
+            idOrder.value = extractText(orderResp.id) || '?';
+            const responseState = Number(extractText(orderResp.current_state));
             console.log('[checkout] state returned by order create:', responseState || '(missing)');
         }
 
         if (idOrder.value && idOrder.value !== '?') {
-            const freshOrderResp = await getXml(`/orders/${idOrder.value}?display=full`);
-            const freshOrder = freshOrderResp?.prestashop?.order;
+            const freshOrder = await getOrder(idOrder.value);
             const currentStateAfterCreate = Number(extractText(freshOrder?.current_state));
             console.log('[checkout] current_state after order reload:', currentStateAfterCreate || '(missing)');
 
@@ -374,8 +358,8 @@ async function passerCommande() {
 
                 await updateOrderStatusByHistory(String(idOrder.value), String(codStateId.value));
 
-                const updatedOrderResp = await getXml(`/orders/${idOrder.value}?display=full`);
-                const updatedState = Number(extractText(updatedOrderResp?.prestashop?.order?.current_state));
+                const updatedOrder = await getOrder(idOrder.value);
+                const updatedState = Number(extractText(updatedOrder?.current_state));
                 console.log('[checkout] current_state after forced update:', updatedState || '(missing)');
             }
         }

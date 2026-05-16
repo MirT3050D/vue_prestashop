@@ -1,4 +1,3 @@
-
 <template>
   <div class="order-list-page">
     <h1>Liste des Commandes</h1>
@@ -44,13 +43,14 @@
               </span>
             </td>
             <td>
-              <select @change="onStatusChange(order.id, $event.target.value)" class="status-select" :disabled="isUpdating[order.id]">
+              <select @change="onStatusChange(order.id, $event.target.value)" class="status-select"
+                :disabled="isUpdating[order.id]">
                 <option disabled selected>-- Changer --</option>
                 <option v-for="state in targetStates" :key="normalizeId(state.id)" :value="normalizeId(state.id)">
                   {{ getStatusName(state.id) }}
                 </option>
               </select>
-               <span v-if="isUpdating[order.id]" class="mini-loader"></span>
+              <span v-if="isUpdating[order.id]" class="mini-loader"></span>
             </td>
           </tr>
         </tbody>
@@ -87,7 +87,7 @@ async function fetchData() {
   error.value = null;
   try {
     const [ordersData, statesData] = await Promise.all([getOrders(), getOrderStates()]);
-    
+
     orders.value = ordersData.sort((a, b) => b.id - a.id); // Sort by most recent
     console.log('ordersData (raw):', ordersData);
     console.log('orders (sorted):', orders.value);
@@ -110,7 +110,7 @@ async function fetchData() {
       const idKey = normalizeId(state.id);
       stateNameMapping.value.set(idKey, stateText);
       stateColorMapping.value.set(idKey, state.color);
-      
+
       if (TARGET_STATE_NAMES.includes(stateName)) {
         targetStates.value.push(state);
       }
@@ -164,50 +164,64 @@ onMounted(fetchData);
 .order-list-page {
   padding: 2rem;
 }
+
 .order-table-container {
   overflow-x: auto;
 }
+
 .order-table {
   width: 100%;
   border-collapse: collapse;
   background: white;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
 }
-.order-table th, .order-table td {
+
+.order-table th,
+.order-table td {
   padding: 12px 15px;
   text-align: left;
   border-bottom: 1px solid #e2e8f0;
 }
+
 .order-table th {
   background-color: #f8fafc;
   font-weight: 600;
 }
+
 .status-badge {
   padding: 4px 8px;
   border-radius: 12px;
   color: white;
   font-size: 0.8rem;
   font-weight: 500;
-  text-shadow: 1px 1px 1px rgba(0,0,0,0.1);
+  text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.1);
 }
+
 .status-select {
   padding: 6px;
   border-radius: 6px;
   border: 1px solid #cbd5e1;
 }
+
 .mini-loader {
-    display: inline-block;
-    width: 16px;
-    height: 16px;
-    border: 2px solid #f3f3f3;
-    border-top: 2px solid #3498db;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-    margin-left: 8px;
-    vertical-align: middle;
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #f3f3f3;
+  border-top: 2px solid #3498db;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-left: 8px;
+  vertical-align: middle;
 }
+
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
 }
 </style>
