@@ -22,15 +22,21 @@ const donutChartCanvas = ref(null);
 let mainChartInstance = null;
 let donutChartInstance = null;
 
-// --- MAPPING ---
+// --- MAPPING DES STATUTS PRESTASHOP (Étendu) ---
 const STATUS_MAP = {
-  2: { label: 'Payé', color: '#10b981' },
-  3: { label: 'En cours', color: '#3b82f6' },
-  4: { label: 'Expédié', color: '#6366f1' },
-  5: { label: 'Livré', color: '#059669' },
-  6: { label: 'Annulé', color: '#ef4444' },
-  7: { label: 'Remboursé', color: '#f59e0b' },
-  default: { label: 'Autre', color: '#94a3b8' }
+  1:  { label: 'Attente Chèque', color: '#94a3b8' },
+  2:  { label: 'Payé', color: '#10b981' },
+  3:  { label: 'Préparation', color: '#3b82f6' },
+  4:  { label: 'Expédié', color: '#6366f1' },
+  5:  { label: 'Livré', color: '#059669' },
+  6:  { label: 'Annulé', color: '#ef4444' },
+  7:  { label: 'Remboursé', color: '#f59e0b' },
+  8:  { label: 'Erreur Paiement', color: '#b91c1c' },
+  9:  { label: 'Rupture', color: '#f97316' },
+  10: { label: 'Attente Virement', color: '#64748b' },
+  11: { label: 'PayPal', color: '#003087' },
+  12: { label: 'Payé (Distant)', color: '#10b981' },
+  default: { label: 'Autre', color: '#d1d5db' }
 };
 
 // --- FONCTIONS UTILITAIRES ---
@@ -45,10 +51,17 @@ function getIntervalKey(dateString) {
   if (Number.isNaN(d.getTime())) return null;
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
-  const q = Math.floor(d.getMonth() / 3) + 1;
+  
   if (aggregationInterval.value === 'yearly') return `${y}`;
-  if (aggregationInterval.value === 'quarterly') return `${y}-T${q}`;
   if (aggregationInterval.value === 'monthly') return `${y}-${m}`;
+  if (aggregationInterval.value === 'weekly') {
+      const tempDate = new Date(d.getTime());
+      tempDate.setHours(0, 0, 0, 0);
+      tempDate.setDate(tempDate.getDate() + 3 - (tempDate.getDay() + 6) % 7);
+      const week1 = new Date(tempDate.getFullYear(), 0, 4);
+      const weekNum = 1 + Math.round(((tempDate.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+      return `${y}-S${String(weekNum).padStart(2, '0')}`;
+  }
   return d.toISOString().slice(0, 10);
 }
 
@@ -60,13 +73,12 @@ const filteredOrders = computed(() => {
   });
 });
 
-// --- ANALYSE PRODUITS (Top 5) ---
+// --- ANALYSE PRODUITS ---
 const topProducts = computed(() => {
   const productMap = new Map();
   for (const order of filteredOrders.value) {
     const rows = order.associations?.order_rows || [];
     const normalizedRows = Array.isArray(rows) ? rows : [rows];
-    
     for (const item of normalizedRows) {
         if (!item.product_id) continue;
         const current = productMap.get(item.product_id) || { name: item.product_name, qty: 0, revenue: 0 };
@@ -87,11 +99,9 @@ const customerStats = computed(() => {
     const d = c.date_add.slice(0, 10);
     return (!startDate.value || d >= startDate.value) && (!endDate.value || d <= endDate.value);
   }).length;
-
   const totalOrders = filteredOrders.value.length;
   const uniqueCustomers = new Set(filteredOrders.value.map(o => o.id_customer)).size;
   const repeatRate = uniqueCustomers > 0 ? ((totalOrders - uniqueCustomers) / totalOrders) * 100 : 0;
-
   return { newAccounts: periodCustomers, loyaltyRate: repeatRate.toFixed(1) };
 });
 
@@ -119,16 +129,16 @@ const summary = computed(() => {
 });
 
 const statusDistribution = computed(() => {
-  const s = {};
+  const stats = {};
   for (const o of filteredOrders.value) {
-    const st = o.current_state || 'default';
-    s[st] = (s[st] || 0) + 1;
+    const stId = o.current_state || 'default';
+    const label = STATUS_MAP[stId]?.label || STATUS_MAP.default.label;
+    stats[label] = (stats[label] || 0) + 1;
   }
-  return Object.entries(s).map(([id, count]) => ({
-    id, count, 
-    label: STATUS_MAP[id]?.label || STATUS_MAP.default.label,
-    color: STATUS_MAP[id]?.color || STATUS_MAP.default.color
-  }));
+  return Object.entries(stats).map(([label, count]) => {
+      const colorEntry = Object.values(STATUS_MAP).find(v => v.label === label) || STATUS_MAP.default;
+      return { label, count, color: colorEntry.color };
+  });
 });
 
 // --- APPELS API ---
@@ -136,38 +146,26 @@ async function fetchData() {
   isLoading.value = true;
   error.value = '';
   try {
-    // 1. Commandes (avec associations pour le top produits)
-    const orderRes = await api.get('/orders', {
-      params: { display: 'full' }
-    });
+    const orderRes = await api.get('/orders', { params: { display: 'full' } });
     const oData = orderRes.data?.orders?.order || orderRes.data?.orders || [];
     rawOrders.value = Array.isArray(oData) ? oData : [oData];
 
-    // Dates par défaut
     if (rawOrders.value.length > 0 && !startDate.value) {
         const sorted = [...rawOrders.value].sort((a,b) => a.date_add.localeCompare(b.date_add));
         startDate.value = sorted[0].date_add.slice(0, 10);
         endDate.value = sorted[sorted.length - 1].date_add.slice(0, 10);
     }
 
-    // 2. Clients
     const custRes = await api.get('/customers', { params: { display: '[id,date_add]' } });
     const cData = custRes.data?.customers?.customer || custRes.data?.customers || [];
     rawCustomers.value = Array.isArray(cData) ? cData : [cData];
 
-    // 3. Stock Alertes (on prend les 8 premiers avec stock faible)
     const stockRes = await api.get('/stock_availables', {
-        params: { 
-            display: '[id_product,quantity]',
-            'filter[quantity]': '[0,10]',
-            limit: '8',
-            sort: '[quantity_ASC]'
-        }
+        params: { display: '[id_product,quantity]', 'filter[quantity]': '[0,10]', limit: '8', sort: '[quantity_ASC]' }
     });
     const sData = stockRes.data?.stock_availables?.stock_available || stockRes.data?.stock_availables || [];
     const stockRaw = Array.isArray(sData) ? sData : [sData];
     
-    // Pour les noms des produits, on peut essayer de les retrouver dans les commandes déjà chargées
     stockAlerts.value = stockRaw.map(s => {
         const found = rawOrders.value.find(o => 
             (Array.isArray(o.associations?.order_rows) ? o.associations.order_rows : [o.associations?.order_rows])
@@ -181,9 +179,8 @@ async function fetchData() {
         }
         return { ...s, name };
     });
-
   } catch (err) {
-    error.value = 'Erreur lors du chargement des données opérationnelles.';
+    error.value = 'Erreur de chargement.';
   } finally {
     isLoading.value = false;
   }
@@ -204,11 +201,18 @@ async function renderCharts() {
       data: {
         labels: groupedRows.value.map(r => r.key),
         datasets: [
-          { label: 'Volume', data: groupedRows.value.map(r => r.orderCount), backgroundColor: '#3b82f6', yAxisID: 'y' },
-          { label: 'CA (€)', data: groupedRows.value.map(r => r.totalAmount), borderColor: '#f59e0b', type: 'line', tension: 0.3, yAxisID: 'y1' }
+          { label: 'CA (€)', data: groupedRows.value.map(r => r.totalAmount), backgroundColor: '#f59e0b', yAxisID: 'y' },
+          { label: 'Volume', data: groupedRows.value.map(r => r.orderCount), borderColor: '#3b82f6', type: 'line', tension: 0.3, yAxisID: 'y1', pointRadius: 4 }
         ]
       },
-      options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true }, y1: { position: 'right', grid: { drawOnChartArea: false } } } }
+      options: { 
+          responsive: true, 
+          maintainAspectRatio: false, 
+          scales: { 
+              y: { beginAtZero: true, title: { display: true, text: 'Chiffre d\'Affaires (€)' } }, 
+              y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'Nb Commandes' } } 
+          } 
+      }
     });
   }
   if (statusDistribution.value.length > 0 && donutChartCanvas.value) {
@@ -218,7 +222,7 @@ async function renderCharts() {
         labels: statusDistribution.value.map(s => s.label),
         datasets: [{ data: statusDistribution.value.map(s => s.count), backgroundColor: statusDistribution.value.map(s => s.color) }]
       },
-      options: { responsive: true, maintainAspectRatio: false, cutout: '75%' }
+      options: { responsive: true, maintainAspectRatio: false, cutout: '70%', plugins: { legend: { position: 'bottom' } } }
     });
   }
 }
@@ -234,32 +238,34 @@ function formatCurrency(v) { return new Intl.NumberFormat('fr-FR', { style: 'cur
   <div class="dashboard-page">
     <header class="header-banner">
       <div class="header-info">
-        <span class="badge-new">PRO UPGRADE</span>
-        <h1>Dashboard Opérationnel</h1>
+        <span class="badge-pro">PILOTAGE AVANCÉ</span>
+        <h1>Dashboard Analytique</h1>
         <div class="filters">
           <input type="date" v-model="startDate">
           <span class="sep">→</span>
           <input type="date" v-model="endDate">
           <select v-model="aggregationInterval" class="select-view">
-            <option value="daily">Jour</option>
-            <option value="monthly">Mois</option>
-            <option value="yearly">An</option>
+            <option value="daily">Vue Journalière</option>
+            <option value="weekly">Vue Hebdomadaire</option>
+            <option value="monthly">Vue Mensuelle</option>
           </select>
         </div>
       </div>
       <button class="btn-refresh" :disabled="isLoading" @click="fetchData">
-        {{ isLoading ? '...' : 'Actualiser' }}
+        {{ isLoading ? '...' : 'Actualiser les données' }}
       </button>
     </header>
 
     <div class="top-metrics">
-      <div class="metric-card">
-        <span class="label">Revenu Total</span>
+      <div class="metric-card highlight">
+        <span class="label">Chiffre d'Affaires</span>
         <div class="value">{{ formatCurrency(summary.revenue) }}</div>
+        <div class="sub-label">Moyenne / {{ aggregationInterval }} : {{ formatCurrency(summary.revenue / (groupedRows.length || 1)) }}</div>
       </div>
       <div class="metric-card">
         <span class="label">Commandes</span>
         <div class="value">{{ summary.count }}</div>
+        <div class="sub-label">{{ (summary.count / (groupedRows.length || 1)).toFixed(1) }} / {{ aggregationInterval }}</div>
       </div>
       <div class="metric-card">
         <span class="label">Nouveaux Clients</span>
@@ -272,57 +278,57 @@ function formatCurrency(v) { return new Intl.NumberFormat('fr-FR', { style: 'cur
     </div>
 
     <div class="main-grid">
-      <!-- Graphiques -->
       <div class="panel col-span-2 chart-container">
-        <h3>Performance Commerciale</h3>
+        <h3>CA et Volume par {{ aggregationInterval }}</h3>
         <div class="canvas-wrap"><canvas ref="mainChartCanvas"></canvas></div>
       </div>
       <div class="panel donut-container">
-        <h3>États des Commandes</h3>
+        <h3>Distribution des États</h3>
         <div class="canvas-wrap"><canvas ref="donutChartCanvas"></canvas></div>
       </div>
 
-      <!-- Widgets Opérationnels -->
-      <div class="panel">
-        <h3>Top 5 Produits Vendus</h3>
-        <div class="widget-list">
-          <div v-for="p in topProducts" :key="p.id" class="list-item">
-            <div class="item-info">
-              <span class="item-name">{{ p.name }}</span>
-              <span class="item-sub">{{ p.qty }} unités</span>
-            </div>
-            <span class="item-price">{{ formatCurrency(p.revenue) }}</span>
-          </div>
+      <!-- Tableau remonté pour meilleure visibilité -->
+      <div class="panel col-span-2">
+        <h3>Détail financier par {{ aggregationInterval }}</h3>
+        <div class="table-wrap">
+          <table class="simple-table">
+            <thead>
+              <tr><th>Période</th><th>Nb Commandes</th><th>Panier Moyen</th><th>CA Total</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="r in groupedRows.slice().reverse().slice(0, 10)" :key="r.key">
+                <td class="font-bold">{{ r.key }}</td>
+                <td>{{ r.orderCount }}</td>
+                <td>{{ formatCurrency(r.averageBasket) }}</td>
+                <td class="text-revenue">{{ formatCurrency(r.totalAmount) }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
       <div class="panel">
-        <h3>Alertes Stock Faible</h3>
+        <h3>Alertes Stock</h3>
         <div class="widget-list">
           <div v-for="s in stockAlerts" :key="s.id_product" class="list-item">
             <span class="item-name">{{ s.name }}</span>
             <span class="stock-badge" :class="{ 'low': s.quantity <= 3, 'warn': s.quantity > 3 }">
-              {{ s.quantity }} restants
+              {{ s.quantity }} en stock
             </span>
           </div>
         </div>
       </div>
 
-      <div class="panel">
-        <h3>Résumé des Périodes</h3>
-        <div class="table-wrap">
-          <table class="simple-table">
-            <thead>
-              <tr><th>Période</th><th>Cmds</th><th>CA</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="r in groupedRows.slice(-5)" :key="r.key">
-                <td>{{ r.key }}</td>
-                <td>{{ r.orderCount }}</td>
-                <td>{{ formatCurrency(r.totalAmount) }}</td>
-              </tr>
-            </tbody>
-          </table>
+      <div class="panel col-span-3">
+        <h3>Top 5 Produits (Volume)</h3>
+        <div class="products-row">
+            <div v-for="p in topProducts" :key="p.id" class="product-mini-card">
+                <span class="p-name">{{ p.name }}</span>
+                <div class="p-stats">
+                    <span class="p-qty">{{ p.qty }} ventes</span>
+                    <span class="p-rev">{{ formatCurrency(p.revenue) }}</span>
+                </div>
+            </div>
         </div>
       </div>
     </div>
@@ -330,57 +336,54 @@ function formatCurrency(v) { return new Intl.NumberFormat('fr-FR', { style: 'cur
 </template>
 
 <style scoped>
-.dashboard-page { padding: 30px; background: #f0f2f5; min-height: 100vh; font-family: 'Inter', sans-serif; }
+.dashboard-page { padding: 30px; background: #f4f7fa; min-height: 100vh; font-family: 'Inter', sans-serif; }
 
-/* Header */
 .header-banner { 
   display: flex; justify-content: space-between; align-items: flex-end; 
-  background: #1a2233; padding: 40px; border-radius: 30px; color: white; margin-bottom: 30px;
+  background: #1e293b; padding: 40px; border-radius: 25px; color: white; margin-bottom: 30px;
+  box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
 }
-.badge-new { 
-  background: #3b82f6; font-size: 0.65rem; padding: 4px 10px; border-radius: 20px; 
-  font-weight: 800; margin-bottom: 10px; display: inline-block;
-}
-.header-banner h1 { margin: 0 0 15px 0; font-size: 2.2rem; font-weight: 800; letter-spacing: -1px; }
+.badge-pro { background: #3b82f6; font-size: 0.6rem; padding: 4px 12px; border-radius: 20px; font-weight: 900; margin-bottom: 12px; display: inline-block; letter-spacing: 1px; }
+.header-banner h1 { margin: 0 0 15px 0; font-size: 2.4rem; font-weight: 800; letter-spacing: -1.5px; }
 .filters { display: flex; align-items: center; gap: 12px; }
-.filters input, .select-view { 
-  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); 
-  color: white; padding: 8px 15px; border-radius: 12px; outline: none;
-}
-.btn-refresh { 
-  background: white; color: #1a2233; border: none; padding: 12px 30px; 
-  border-radius: 15px; font-weight: 700; cursor: pointer; transition: all 0.2s;
-}
+.filters input, .select-view { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2); color: white; padding: 10px 15px; border-radius: 12px; outline: none; font-size: 0.9rem; }
+.btn-refresh { background: #3b82f6; color: white; border: none; padding: 14px 30px; border-radius: 15px; font-weight: 700; cursor: pointer; transition: all 0.2s; }
+.btn-refresh:hover { background: #2563eb; transform: translateY(-2px); }
 
-/* Metrics Cards */
-.top-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 30px; }
-.metric-card { background: white; padding: 25px; border-radius: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.02); }
-.metric-card .label { color: #64748b; font-size: 0.85rem; font-weight: 600; display: block; margin-bottom: 8px; }
-.metric-card .value { font-size: 1.8rem; font-weight: 800; color: #1e293b; }
+.top-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-bottom: 30px; }
+.metric-card { background: white; padding: 25px; border-radius: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.02); border: 1px solid #e2e8f0; }
+.metric-card.highlight { border-top: 5px solid #f59e0b; }
+.metric-card .label { color: #64748b; font-size: 0.8rem; font-weight: 700; display: block; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+.metric-card .value { font-size: 2rem; font-weight: 900; color: #0f172a; letter-spacing: -1px; }
+.sub-label { font-size: 0.75rem; color: #94a3b8; margin-top: 8px; font-weight: 500; }
 
-/* Grid & Panels */
 .main-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 25px; }
 .col-span-2 { grid-column: span 2; }
-.panel { background: white; padding: 25px; border-radius: 25px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05); }
-.panel h3 { margin-top: 0; font-size: 1.1rem; color: #1e293b; margin-bottom: 20px; border-left: 4px solid #3b82f6; padding-left: 15px; }
+.col-span-3 { grid-column: span 3; }
+.panel { background: white; padding: 25px; border-radius: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; }
+.panel h3 { margin-top: 0; font-size: 1rem; color: #1e293b; margin-bottom: 25px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; color: #3b82f6; }
 
-.canvas-wrap { height: 300px; position: relative; }
+.canvas-wrap { height: 320px; position: relative; }
 
-/* Lists */
+.simple-table { width: 100%; border-collapse: collapse; }
+.simple-table th { text-align: left; font-size: 0.7rem; color: #94a3b8; padding: 12px 8px; text-transform: uppercase; letter-spacing: 1px; }
+.simple-table td { padding: 15px 8px; font-size: 0.9rem; border-top: 1px solid #f1f5f9; color: #334155; }
+.font-bold { font-weight: 700; }
+.text-revenue { color: #f59e0b; font-weight: 800; }
+
 .widget-list { display: flex; flex-direction: column; gap: 15px; }
-.list-item { display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px; border-bottom: 1px solid #f1f5f9; }
-.item-name { font-weight: 600; color: #334155; font-size: 0.95rem; display: block; }
-.item-sub { color: #94a3b8; font-size: 0.8rem; }
-.item-price { font-weight: 700; color: #10b981; }
-
-.stock-badge { padding: 4px 12px; border-radius: 8px; font-size: 0.75rem; font-weight: 700; }
+.list-item { display: flex; justify-content: space-between; align-items: center; padding-bottom: 12px; border-bottom: 1px solid #f1f5f9; }
+.item-name { font-weight: 600; color: #334155; font-size: 0.9rem; }
+.stock-badge { padding: 5px 12px; border-radius: 10px; font-size: 0.7rem; font-weight: 800; }
 .stock-badge.low { background: #fef2f2; color: #ef4444; }
 .stock-badge.warn { background: #fffbeb; color: #f59e0b; }
 
-/* Tables */
-.simple-table { width: 100%; border-collapse: collapse; }
-.simple-table th { text-align: left; font-size: 0.75rem; color: #64748b; padding: 8px; }
-.simple-table td { padding: 8px; font-size: 0.85rem; border-top: 1px solid #f1f5f9; }
+.products-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px; }
+.product-mini-card { background: #f8fafc; padding: 15px; border-radius: 15px; border: 1px solid #e2e8f0; display: flex; flex-direction: column; gap: 10px; }
+.p-name { font-size: 0.85rem; font-weight: 700; color: #1e293b; line-height: 1.2; height: 2.4em; overflow: hidden; }
+.p-stats { display: flex; justify-content: space-between; align-items: center; }
+.p-qty { font-size: 0.75rem; color: #64748b; font-weight: 600; }
+.p-rev { font-size: 0.8rem; font-weight: 800; color: #10b981; }
 
-@media (max-width: 1200px) { .top-metrics { grid-template-columns: repeat(2, 1fr); } .main-grid { grid-template-columns: 1fr; } .col-span-2 { grid-column: span 1; } }
+@media (max-width: 1200px) { .top-metrics { grid-template-columns: repeat(2, 1fr); } .main-grid { grid-template-columns: 1fr; } .col-span-2, .col-span-3 { grid-column: span 1; } .products-row { grid-template-columns: 1fr; } }
 </style>
