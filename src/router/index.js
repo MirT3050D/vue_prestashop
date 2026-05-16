@@ -2,6 +2,7 @@ import OrderListView from '@/view/backoffice/OrderListView.vue';import { createR
 import HomeView from '../view/frontoffice/HomeView.vue'
 import TestApiGet from '@/components/TestApiGet.vue'
 import ListProduitsView from '@/view/ListProduitsView.vue'
+import DashboardView from '@/view/backoffice/DashboardView.vue'
 import ResetView from '@/view/backoffice/ResetView.vue'
 import LoginBackView from '@/view/backoffice/LoginBackView.vue'
 import ImportView from '@/view/backoffice/ImportView.vue'
@@ -15,8 +16,8 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [{
     path: '/backofficeDashboard',
-    name: 'home',
-    component: HomeView,
+    name: 'dashboard',
+    component: DashboardView,
     meta: { requiresAuth: true, isBackoffice: true }
   },
   {
@@ -94,7 +95,7 @@ router.beforeEach((to, from, next) => {
   // Si l'utilisateur est authentifié et essaie d'aller sur la page de login
   else if (isAuthenticated && to.name === 'login') {
     // Redirige vers la première page utile du back-office (ex: import)
-    next({ name: 'import' });
+    next({ name: 'dashboard' });
   } 
   // Pour toutes les autres situations, laisser passer
   else {

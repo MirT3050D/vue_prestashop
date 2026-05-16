@@ -9,18 +9,16 @@ const basicAuthHeader = `Basic ${btoa(`${apiKey}:`)}`;
 export const api = axios.create({
   // Utilise l'URL exacte qui fonctionne
   baseURL: urlBase,
-  headers: {
-    Authorization: basicAuthHeader
-  },
   params: {
+    ws_key: apiKey,
     output_format: 'JSON'
   }
 });
 
 const rawApi = axios.create({
   baseURL: urlBase,
-  headers: {
-    Authorization: basicAuthHeader
+  params: {
+    ws_key: apiKey
   }
 });
 
@@ -29,8 +27,8 @@ const rawApiNoAuth = axios.create({
 });
 
 const rawNoBaseAuth = axios.create({
-  headers: {
-    Authorization: basicAuthHeader
+  params: {
+    ws_key: apiKey
   }
 });
 
@@ -191,9 +189,7 @@ export async function postImage(url, imageFile) {
     headers: {
       'Content-Type': 'multipart/form-data',
     },
-    params: {},
     responseType: 'text'
   });
   return parseResponseData(response.data);
-  88
 }

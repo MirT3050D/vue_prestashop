@@ -30,7 +30,7 @@ function handleLogin(credentials) {
         if (credentials.email === storedLogin.identifiant && credentials.password === storedLogin.mot_de_passe) {
             const token = "mon_token_123_backoffice";
             localStorage.setItem('token', JSON.stringify(token));
-            router.push("/import");
+            router.push("/backofficeDashboard");
         } else {
             error.value = "Identifiants administrateur incorrects.";
         }
