@@ -4,17 +4,21 @@ import { getImage } from '@/service/api';
 import { getProduct, getCombinations, getProductOptionValues, getProductOptions } from '@/service/productService';
 import { getProductTaxRate } from '@/service/price';
 import Loading from '@/components/Loading.vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import { getStockAvailables } from '@/service/stockService';
 
 const route = useRoute();
+const router = useRouter();
 const loading = ref(false);
+const cartSuccessMessage = ref('');
+const showCartNotification = ref(false);
 const product = ref(null);
 const imageUrl = ref(null);
 const variants = ref([]);
 const selectedOptions = ref({});
 const productCombinations = ref([]);
+const lastSelectedOptions = ref({});
 const quantity = ref(1);
 const productTaxRate = ref(0);
 const stock = ref(0);
@@ -54,8 +58,7 @@ async function updateCurrentStock() {
                 ? combValues.map(v => safeId(v.id))
                 : [safeId(combValues.id)];
 
-            return currentSelectedValues.length === combValueIds.length &&
-                currentSelectedValues.every(id => combValueIds.includes(id));
+            return combValueIds.every(id => currentSelectedValues.includes(id));
         });
 
         if (matchingCombination) {
@@ -102,14 +105,7 @@ async function updateImage() {
 
             const combValueIds = Array.isArray(combValues) ? combValues.map(v => safeId(v.id)) : [safeId(combValues.id)];
 
-            let match = true;
-            for (let j = 0; j < currentSelectedValues.length; j++) {
-                if (!combValueIds.includes(currentSelectedValues[j])) {
-                    match = false;
-                    break;
-                }
-            }
-            if (match) {
+            if (combValueIds.every(id => currentSelectedValues.includes(id))) {
                 matchingComb = comb;
                 break;
             }
@@ -132,7 +128,110 @@ async function updateImage() {
     }
 }
 
-watch(selectedOptions, async () => {
+function isOptionValueAvailable(groupName, valueId) {
+    if (productCombinations.value.length === 0) return true;
+
+    return productCombinations.value.some(comb => {
+        const combValues = comb.associations?.product_option_values?.product_option_value;
+        if (!combValues) return false;
+        
+        const combValueIds = Array.isArray(combValues)
+            ? combValues.map(v => safeId(v.id))
+            : [safeId(combValues.id)];
+
+        // Le valueId recherché doit être présent
+        if (!combValueIds.includes(String(valueId))) return false;
+
+        // Et toutes les autres sélections déjà faites doivent être compatibles
+        for (const variant of variants.value) {
+            if (variant.name === groupName) continue;
+
+            // Si ce groupe de déclinaison n'est pas du tout défini/utilisé dans cette combinaison, on ignore sa sélection
+            const isGroupUsed = variant.values.some(val => combValueIds.includes(String(val.id)));
+            if (!isGroupUsed) continue;
+
+            const selectedValId = selectedOptions.value[variant.name];
+            if (selectedValId && !combValueIds.includes(String(selectedValId))) {
+                return false;
+            }
+        }
+
+        return true;
+    });
+}
+
+function getAvailableValues(variant) {
+    if (!variant || !variant.values) return [];
+    return variant.values.filter(val => isOptionValueAvailable(variant.name, val.id));
+}
+
+watch(selectedOptions, async (newVal) => {
+    if (productCombinations.value.length > 0) {
+        // Vérifier si la combinaison complète sélectionnée est valide
+        const hasMatch = productCombinations.value.some(comb => {
+            const combValues = comb.associations?.product_option_values?.product_option_value;
+            if (!combValues) return false;
+            const combValueIds = Array.isArray(combValues)
+                ? combValues.map(v => safeId(v.id))
+                : [safeId(combValues.id)];
+
+            return variants.value.every(variant => {
+                const selectedValId = newVal[variant.name];
+                if (!selectedValId) return true;
+
+                // Si le groupe n'est pas utilisé par la combinaison, sa sélection n'invalide pas le match
+                const isGroupUsed = variant.values.some(val => combValueIds.includes(String(val.id)));
+                if (!isGroupUsed) return true;
+
+                return combValueIds.includes(String(selectedValId));
+            });
+        });
+
+        if (!hasMatch) {
+            // Trouver quelle option a été modifiée par l'utilisateur
+            let changedKey = null;
+            for (const key of Object.keys(newVal)) {
+                if (newVal[key] !== lastSelectedOptions.value[key]) {
+                    changedKey = key;
+                    break;
+                }
+            }
+
+            if (changedKey) {
+                const newValId = newVal[changedKey];
+                const matchingComb = productCombinations.value.find(comb => {
+                    const combValues = comb.associations?.product_option_values?.product_option_value;
+                    if (!combValues) return false;
+                    const combValueIds = Array.isArray(combValues)
+                        ? combValues.map(v => safeId(v.id))
+                        : [safeId(combValues.id)];
+                    return combValueIds.includes(String(newValId));
+                });
+
+                if (matchingComb) {
+                    const combValues = matchingComb.associations?.product_option_values?.product_option_value;
+                    const combValueIds = Array.isArray(combValues)
+                        ? combValues.map(v => safeId(v.id))
+                        : [safeId(combValues.id)];
+
+                    for (const variant of variants.value) {
+                        if (variant.name === changedKey) continue;
+
+                        // Si le groupe n'est pas utilisé par cette combinaison, on ne touche pas à sa sélection
+                        const isGroupUsed = variant.values.some(val => combValueIds.includes(String(val.id)));
+                        if (!isGroupUsed) continue;
+
+                        const compatibleVal = variant.values.find(val => combValueIds.includes(String(val.id)));
+                        if (compatibleVal) {
+                            selectedOptions.value[variant.name] = compatibleVal.id;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    lastSelectedOptions.value = { ...selectedOptions.value };
     await updateCurrentStock();
     await updateImage();
 }, { deep: true });
@@ -200,12 +299,34 @@ onMounted(async () => {
                 }
                 variants.value = structuredVariants;
 
-                for (let i = 0; i < structuredVariants.length; i++) {
-                    let v = structuredVariants[i];
-                    if (v && v.values && v.values.length > 0) {
-                        selectedOptions.value[v.name] = safeId(v.values[0].id);
+                // Initialisation intelligente avec la première déclinaison existante et valide du produit
+                if (allCombinations.length > 0) {
+                    const firstComb = allCombinations[0];
+                    const combValues = firstComb.associations?.product_option_values?.product_option_value;
+                    const firstCombValueIds = Array.isArray(combValues)
+                        ? combValues.map(v => safeId(v.id))
+                        : [safeId(combValues.id)];
+
+                    for (let i = 0; i < structuredVariants.length; i++) {
+                        let v = structuredVariants[i];
+                        if (v && v.values && v.values.length > 0) {
+                            const matchingVal = v.values.find(val => firstCombValueIds.includes(String(val.id)));
+                            if (matchingVal) {
+                                selectedOptions.value[v.name] = matchingVal.id;
+                            } else {
+                                selectedOptions.value[v.name] = v.values[0].id;
+                            }
+                        }
+                    }
+                } else {
+                    for (let i = 0; i < structuredVariants.length; i++) {
+                        let v = structuredVariants[i];
+                        if (v && v.values && v.values.length > 0) {
+                            selectedOptions.value[v.name] = safeId(v.values[0].id);
+                        }
                     }
                 }
+                lastSelectedOptions.value = { ...selectedOptions.value };
             }
         }
 
@@ -224,8 +345,106 @@ const calculatedPriceTtc = computed(() => {
     const basePriceHt = parseFloat(product.value.price) || 0;
     return basePriceHt * (1 + productTaxRate.value / 100);
 });
+
+function getCartStorageKey() {
+    const customerJson = localStorage.getItem('customer');
+    if (customerJson) {
+        try {
+            const customerData = JSON.parse(customerJson);
+            if (customerData?.id) return `panier_${customerData.id}`;
+        } catch (e) {
+            console.error("Erreur parse customer:", e);
+        }
+    }
+    return 'panier_guest';
+}
+
+function addToCart() {
+    if (!product.value) return;
+
+    const cleanProductId = safeId(product.value.id);
+    let idProductAttribute = '0';
+
+    if (productCombinations.value.length > 0) {
+        const currentSelectedValues = [];
+        for (const key of Object.keys(selectedOptions.value)) {
+            if (selectedOptions.value[key]) {
+                currentSelectedValues.push(String(selectedOptions.value[key]));
+            }
+        }
+
+        const matchingCombination = productCombinations.value.find(comb => {
+            const combValues = comb.associations?.product_option_values?.product_option_value;
+            if (!combValues) return false;
+            const combValueIds = Array.isArray(combValues)
+                ? combValues.map(v => safeId(v.id))
+                : [safeId(combValues.id)];
+
+            return combValueIds.every(id => currentSelectedValues.includes(id));
+        });
+
+        if (matchingCombination) {
+            idProductAttribute = safeId(matchingCombination.id);
+        }
+    }
+
+    const storageKey = getCartStorageKey();
+    let cart = [];
+    try {
+        const cartJson = localStorage.getItem(storageKey);
+        if (cartJson) {
+            cart = JSON.parse(cartJson);
+        }
+    } catch (e) {
+        console.error("Erreur lecture panier local:", e);
+    }
+
+    const existingIndex = cart.findIndex(item => 
+        String(item.id_product) === String(cleanProductId) && 
+        String(item.id_product_attribute) === String(idProductAttribute)
+    );
+
+    if (existingIndex > -1) {
+        cart[existingIndex].quantity += quantity.value;
+    } else {
+        cart.push({
+            id_product: String(cleanProductId),
+            id_product_attribute: String(idProductAttribute),
+            quantity: quantity.value,
+            name: getLangText(product.value.name),
+            price: Number(product.value.price) || 0,
+            taxRate: productTaxRate.value,
+            image: imageUrl.value
+        });
+    }
+
+    localStorage.setItem(storageKey, JSON.stringify(cart));
+
+    // Déclencher la notification de succès
+    cartSuccessMessage.value = `"${getLangText(product.value.name)}" a été ajouté au panier !`;
+    showCartNotification.value = true;
+
+    // Masquer automatiquement après 4 secondes
+    setTimeout(() => {
+        showCartNotification.value = false;
+    }, 4000);
+}
 </script>
 <template>
+    <!-- Notification Toast pour l'ajout au panier -->
+    <div v-if="showCartNotification" class="toast-notification">
+        <div class="toast-content">
+            <Icon icon="solar:check-circle-bold" class="toast-icon success" />
+            <div class="toast-text">
+                <p class="toast-message">{{ cartSuccessMessage }}</p>
+                <div class="toast-actions">
+                    <router-link to="/panier" class="toast-btn view-cart-btn">Voir le panier</router-link>
+                    <button @click="showCartNotification = false" class="toast-btn close-toast-btn">Fermer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div v-if="loading" class="loading-wrapper">
         <Loading :is-loading="loading" />
     </div>
@@ -262,10 +481,10 @@ const calculatedPriceTtc = computed(() => {
                 <hr class="section-divider" />
 
                 <div v-if="variants.length > 0" class="variants-container">
-                    <div v-for="variant in variants" :key="variant.id" class="variant-group">
+                    <div v-for="variant in variants" :key="variant.id" class="variant-group" v-show="getAvailableValues(variant).length > 0">
                         <label class="variant-label">{{ variant.name }}</label>
                         <select v-model="selectedOptions[variant.name]" class="variant-select">
-                            <option v-for="val in variant.values" :key="val.id" :value="val.id">
+                            <option v-for="val in getAvailableValues(variant)" :key="val.id" :value="val.id">
                                 {{ val.name }}
                             </option>
                         </select>
@@ -282,7 +501,7 @@ const calculatedPriceTtc = computed(() => {
                             :disabled="stock === 0 || quantity >= stock">+</button>
                     </div>
 
-                    <button class="add-to-cart-btn" :disabled="stock === 0 || quantity > stock">
+                    <button @click="addToCart" class="add-to-cart-btn" :disabled="stock === 0 || quantity > stock">
                         <Icon icon="solar:cart-large-minimalistic-bold" class="btn-icon" />
                         <span>{{ stock === 0 ? 'Indisponible' : 'Ajouter au panier' }}</span>
                     </button>
@@ -503,11 +722,13 @@ const calculatedPriceTtc = computed(() => {
     font-weight: 600;
     outline: none;
     -moz-appearance: textfield;
+    appearance: textfield;
 }
 
 .qty-input::-webkit-outer-spin-button,
 .qty-input::-webkit-inner-spin-button {
     -webkit-appearance: none;
+    appearance: none;
     margin: 0;
 }
 
@@ -558,5 +779,105 @@ const calculatedPriceTtc = computed(() => {
     font-size: 1rem;
     line-height: 1.6;
     color: #57606f;
+}
+
+/* === TOAST NOTIFICATION DE PANIER PREMIUM === */
+.toast-notification {
+    position: fixed;
+    top: 24px;
+    right: 24px;
+    z-index: 1000;
+    max-width: 380px;
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(12px) saturate(180%);
+    -webkit-backdrop-filter: blur(12px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 18px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08), 
+                inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    padding: 16px 20px;
+    animation: slideInRight 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    box-sizing: border-box;
+}
+
+.toast-content {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+}
+
+.toast-icon {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.toast-icon.success {
+    color: #2ed573;
+}
+
+.toast-text {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex-grow: 1;
+}
+
+.toast-message {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #2f3542;
+    line-height: 1.4;
+}
+
+.toast-actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+.toast-btn {
+    border: none;
+    font-size: 0.85rem;
+    font-weight: 700;
+    padding: 8px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    text-align: center;
+}
+
+.view-cart-btn {
+    background: linear-gradient(135deg, #2ed573, #26af5f);
+    color: white;
+    box-shadow: 0 4px 10px rgba(46, 213, 115, 0.2);
+}
+
+.view-cart-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 14px rgba(46, 213, 115, 0.3);
+}
+
+.close-toast-btn {
+    background: #f1f2f6;
+    color: #57606f;
+}
+
+.close-toast-btn:hover {
+    background: #e4e7eb;
+    color: #2f3542;
+}
+
+@keyframes slideInRight {
+    from {
+        opacity: 0;
+        transform: translateX(40px) scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+    }
 }
 </style>

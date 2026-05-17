@@ -193,12 +193,10 @@ async function loadCart() {
                     const product = await getProduct(item.id_product);
                     if (product) {
                         if (taxRate == null) taxRate = await getProductTaxRate(item.id_product);
-                        if (!name) {
-                            const nameNode = product.name?.language;
-                            const text = Array.isArray(nameNode) ? nameNode[0]['#text'] : (nameNode?.['#text'] || nameNode);
-                            name = extractText(text) || 'Produit sans nom';
-                        }
-                        if (price == null) price = Number(extractText(product.price)) || 0;
+                        const nameNode = product.name?.language;
+                        const text = Array.isArray(nameNode) ? nameNode[0]['#text'] : (nameNode?.['#text'] || nameNode);
+                        name = extractText(text) || 'Produit sans nom';
+                        price = Number(extractText(product.price)) || 0;
 
                         const imgId = extractText(product.id_default_image);
                         if (!image && imgId) {

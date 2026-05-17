@@ -1,14 +1,12 @@
 <script setup>
-
 import { ref, onMounted, computed } from 'vue';
 import { Icon } from '@iconify/vue';
-import { getImage } from '@/service/api';
+import { getImage, getPrestaShopConfig, getXml, postXml, putXml } from '@/service/api';
 import { calculateTtc, getProductTaxRate } from '@/service/price';
 import { getProduct } from '@/service/productService';
 import { getCustomerAddresses, createAddress } from '@/service/addressService';
 import { createCart } from '@/service/cartService';
 import { createOrder, getOrderStates, updateOrderStatusByHistory, getOrder } from '@/service/orderService';
-import { getPrestaShopConfig } from '@/service/api';
 import { useRouter } from 'vue-router';
 
 const router = useRouter();
@@ -23,9 +21,25 @@ const codStateId = ref(10); // Default fallback for COD
 const panier = ref([]);
 const customer = ref(null);
 
+function getCartStorageKey() {
+    const customerJson = localStorage.getItem('customer');
+    if (customerJson) {
+        try {
+            const customerData = JSON.parse(customerJson);
+            if (customerData?.id) return `panier_${customerData.id}`;
+        } catch (e) {
+            console.error("Erreur parse customer:", e);
+        }
+    }
+    return 'panier_guest';
+}
+
 async function enrichCartItem(item) {
     let taxRate = item.taxRate;
     let image = item.image || null;
+    let price = item.price;
+    let name = item.name;
+    let reference = item.reference;
 
     if (taxRate == null) {
         taxRate = await getProductTaxRate(item.id_product);
@@ -33,19 +47,30 @@ async function enrichCartItem(item) {
 
     try {
         const product = await getProduct(item.id_product);
-        if (product && product.id_default_image) {
-            let imgId = product.id_default_image;
-            if (typeof imgId === 'object' && imgId['#text']) imgId = imgId['#text'];
-            if (typeof imgId === 'object' && imgId['@_xlink:href']) {
-                 imgId = imgId['@_xlink:href'].split('/').pop();
+        if (product) {
+            price = Number(extractText(product.price)) || 0;
+            const nameNode = product.name?.language;
+            const text = Array.isArray(nameNode) ? nameNode[0]['#text'] : (nameNode?.['#text'] || nameNode);
+            name = extractText(text) || 'Produit sans nom';
+            reference = extractText(product.reference) || '';
+
+            if (product.id_default_image) {
+                let imgId = product.id_default_image;
+                if (typeof imgId === 'object' && imgId['#text']) imgId = imgId['#text'];
+                if (typeof imgId === 'object' && imgId['@_xlink:href']) {
+                    imgId = imgId['@_xlink:href'].split('/').pop();
+                }
+                const path = `images/products/${item.id_product}/${imgId}`;
+                image = await getImage(path);
             }
-            const path = `images/products/${item.id_product}/${imgId}`;
-            image = await getImage(path);
         }
-    } catch (e) {}
+    } catch (e) { }
 
     return {
         ...item,
+        name: name || `Produit #${item.id_product}`,
+        price: price || 0,
+        reference: reference || '',
         taxRate: Number(taxRate) || 0,
         image
     };
@@ -85,17 +110,20 @@ const totalPanier = computed(() => {
     return total.toFixed(2);
 });
 
-/**
- * Lookup the order state ID for "Paiement à la livraison" (Cash on Delivery).
- * Falls back to state 10 if not found.
- */
+const totalPanierHt = computed(() => {
+    let total = 0;
+    for (let i = 0; i < panier.value.length; i++) {
+        total = total + (Number(panier.value[i].price || 0) * panier.value[i].quantity);
+    }
+    return total.toFixed(6);
+});
+
 async function findCodStateId() {
     try {
         const config = await getPrestaShopConfig('PS_OS_COD_VALIDATION');
         const configuredStateId = Number(extractText(config?.value));
         if (configuredStateId > 0) {
             codStateId.value = configuredStateId;
-            console.log('[checkout] COD state id from configuration:', codStateId.value);
             return;
         }
 
@@ -106,7 +134,6 @@ async function findCodStateId() {
             const moduleName = extractText(states[i].module_name).toLowerCase();
             if (moduleName === 'ps_cashondelivery') {
                 codStateId.value = Number(extractText(states[i].id));
-                console.log('[checkout] COD state id from module_name:', codStateId.value);
                 return;
             }
 
@@ -119,35 +146,95 @@ async function findCodStateId() {
 
             if (hasCodLabel) {
                 codStateId.value = Number(extractText(states[i].id));
-                console.log('[checkout] COD state id from state label:', codStateId.value);
                 return;
             }
         }
-
-        console.warn('[checkout] COD state id not found in configuration or states. Using fallback:', codStateId.value);
     } catch (e) {
         console.log('Could not fetch order states for COD lookup:', e);
     }
 }
 
+// ============================================================================
+// LOGIQUE DE DÉCRÉMENTATION DE STOCK (Avec Hack pour StockEvolution.vue)
+// ============================================================================
+async function forceUpdateStockAvailable(stockAvailable, newQty) {
+    const stId = extractText(stockAvailable.id);
+    const stProductId = extractText(stockAvailable.id_product);
+    let stAttrId = extractText(stockAvailable.id_product_attribute);
+    if (stAttrId === '') stAttrId = '0';
+
+    const stShop = extractText(stockAvailable.id_shop) || '1';
+    const stShopGroup = extractText(stockAvailable.id_shop_group) || '0';
+    const stDepends = extractText(stockAvailable.depends_on_stock) || '0';
+    const stOutOfStock = extractText(stockAvailable.out_of_stock) || '2';
+    const stLocation = (typeof stockAvailable.location === 'object' ? '' : stockAvailable.location) || '';
+
+    const stockXml = `<?xml version="1.0" encoding="UTF-8"?>
+    <prestashop><stock_available>
+        <id><![CDATA[${stId}]]></id>
+        <id_product><![CDATA[${stProductId}]]></id_product>
+        <id_product_attribute><![CDATA[${stAttrId}]]></id_product_attribute>
+        <id_shop><![CDATA[${stShop}]]></id_shop>
+        <id_shop_group><![CDATA[${stShopGroup}]]></id_shop_group>
+        <quantity><![CDATA[${newQty}]]></quantity>
+        <depends_on_stock><![CDATA[${stDepends}]]></depends_on_stock>
+        <out_of_stock><![CDATA[${stOutOfStock}]]></out_of_stock>
+        <location><![CDATA[${stLocation}]]></location>
+    </stock_available></prestashop>`;
+
+    await putXml(`/stock_availables/${stId}`, stockXml);
+}
+
+async function decrementStock(pId, attributeId, quantity, orderId) {
+    try {
+        const attrFilter = attributeId ? attributeId : 0;
+        const stockSearch = await getXml(`/stock_availables?filter[id_product]=[${pId}]&filter[id_product_attribute]=[${attrFilter}]&display=full`);
+        let stockAvailable = stockSearch?.prestashop?.stock_availables?.stock_available;
+
+        if (stockAvailable) {
+            if (Array.isArray(stockAvailable)) stockAvailable = stockAvailable[0];
+            const oldQty = parseInt(extractText(stockAvailable.quantity), 10) || 0;
+            const newQty = oldQty - quantity;
+
+            await forceUpdateStockAvailable(stockAvailable, newQty);
+
+            const dateAdd = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+            // CORRECTION ICI : On utilise id_order et id_supply_order pour que StockEvolution.vue affiche le bon nom !
+            const baseXml = `
+                <id_order><![CDATA[${pId}]]></id_order>
+                <id_supply_order><![CDATA[${attrFilter}]]></id_supply_order>
+                <id_employee><![CDATA[1]]></id_employee>
+                <id_stock><![CDATA[0]]></id_stock>
+                <id_stock_mvt_reason><![CDATA[3]]></id_stock_mvt_reason>
+                <physical_quantity><![CDATA[${quantity}]]></physical_quantity>
+                <sign><![CDATA[0]]></sign>
+                <price_te><![CDATA[0.000000]]></price_te>
+                <date_add><![CDATA[${dateAdd}]]></date_add>
+            `;
+            await postXml('/stock_movements', `<?xml version="1.0" encoding="UTF-8"?>\n<prestashop><stock_mvt>${baseXml}</stock_mvt></prestashop>`);
+        }
+    } catch (e) {
+        console.warn(`[checkout] Erreur décrémentation: ${e.message}`);
+    }
+}
+
 // ===== Chargement initial =====
 onMounted(async () => {
-    // Fetch COD state ID
     await findCodStateId();
 
-    // Charger panier
-    const cartJson = localStorage.getItem('panier');
+    const storageKey = getCartStorageKey();
+    const cartJson = localStorage.getItem(storageKey);
     if (cartJson) {
         try {
             const parsedCart = JSON.parse(cartJson);
             panier.value = await Promise.all(parsedCart.map((item) => enrichCartItem(item)));
-            localStorage.setItem('panier', JSON.stringify(panier.value));
+            localStorage.setItem(storageKey, JSON.stringify(panier.value));
         } catch (e) {
             panier.value = [];
         }
     }
 
-    // Charger client
     const customerJson = localStorage.getItem('customer');
     if (!customerJson) {
         router.push('/connexion');
@@ -166,11 +253,9 @@ onMounted(async () => {
         return;
     }
 
-    // Pré-remplir nom/prénom depuis le profil
     form.value.firstname = customer.value.firstname || '';
     form.value.lastname = customer.value.lastname || '';
 
-    // Tenter de récupérer une adresse existante
     try {
         const adresses = await getCustomerAddresses(customer.value.id);
         if (adresses.length > 0) {
@@ -183,18 +268,15 @@ onMounted(async () => {
             form.value.phone = a.phone || '';
             form.value.alias = a.alias || 'Mon adresse';
         }
-    } catch (e) {
-        console.log('Pas d\'adresse existante:', e);
-    }
+    } catch (e) { }
 });
 
-// ===== Validation du formulaire =====
 function validerFormulaire() {
     if (!normalizeFormText(form.value.firstname)) return 'Le prénom est requis.';
-    if (!normalizeFormText(form.value.lastname))  return 'Le nom est requis.';
-    if (!normalizeFormText(form.value.address1))  return 'L\'adresse est requise.';
-    if (!normalizeFormText(form.value.postcode))  return 'Le code postal est requis.';
-    if (!normalizeFormText(form.value.city))      return 'La ville est requise.';
+    if (!normalizeFormText(form.value.lastname)) return 'Le nom est requis.';
+    if (!normalizeFormText(form.value.address1)) return 'L\'adresse est requise.';
+    if (!normalizeFormText(form.value.postcode)) return 'Le code postal est requis.';
+    if (!normalizeFormText(form.value.city)) return 'La ville est requise.';
     return '';
 }
 
@@ -207,18 +289,13 @@ async function passerCommande() {
     error.value = '';
 
     try {
-        console.log('[checkout] COD state id:', codStateId.value);
-        const totalAmount = Number(totalPanier.value || 0).toFixed(6);
-        // 1. Créer ou réutiliser une adresse
         let idAdresse = 0;
 
-        // Chercher une adresse existante
         try {
             const adresses = await getCustomerAddresses(customer.value.id);
             if (adresses.length > 0 && adresses[0].id) idAdresse = adresses[0].id;
-        } catch (e) {}
+        } catch (e) { }
 
-        // Créer une nouvelle adresse si aucune trouvée
         if (!idAdresse) {
             let adresseXml = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
@@ -244,10 +321,17 @@ async function passerCommande() {
             return;
         }
 
-        // 2. Créer le panier PrestaShop
         let cartRowsXml = '';
+        let orderRowsXml = '';
+        let cartTotal = 0;
+
         for (let i = 0; i < panier.value.length; i++) {
             let item = panier.value[i];
+
+            const basePriceHt = Number(item.price || 0);
+            const lineTotal = basePriceHt * item.quantity;
+            cartTotal += lineTotal;
+
             cartRowsXml += `
       <cart_row>
         <id_product>${item.id_product}</id_product>
@@ -255,6 +339,18 @@ async function passerCommande() {
         <id_address_delivery>${idAdresse}</id_address_delivery>
         <quantity>${item.quantity}</quantity>
       </cart_row>`;
+
+            orderRowsXml += `
+        <order_row>
+          <product_id>${item.id_product}</product_id>
+          <product_attribute_id>${item.id_product_attribute || 0}</product_attribute_id>
+          <product_quantity>${item.quantity}</product_quantity>
+          <product_name><![CDATA[${item.name}]]></product_name>
+          <product_reference><![CDATA[${item.reference || ''}]]></product_reference>
+          <product_price>${basePriceHt.toFixed(6)}</product_price>
+          <unit_price_tax_incl>${basePriceHt.toFixed(6)}</unit_price_tax_incl>
+          <unit_price_tax_excl>${basePriceHt.toFixed(6)}</unit_price_tax_excl>
+        </order_row>`;
         }
 
         let cartXml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -266,14 +362,12 @@ async function passerCommande() {
     <id_address_delivery>${idAdresse}</id_address_delivery>
     <id_address_invoice>${idAdresse}</id_address_invoice>
     <associations>
-      <cart_rows>${cartRowsXml}
-      </cart_rows>
+      <cart_rows>${cartRowsXml}</cart_rows>
     </associations>
   </cart>
 </prestashop>`;
 
         let cartResp = await createCart(cartXml);
-        console.log('[checkout] cart response:', cartResp);
         let idCart = cartResp?.id || 0;
 
         if (!idCart) {
@@ -282,19 +376,7 @@ async function passerCommande() {
             return;
         }
 
-        // 3. Créer la commande
-        let orderRowsXml = '';
-        for (let i = 0; i < panier.value.length; i++) {
-            let item = panier.value[i];
-            orderRowsXml += `
-        <order_row>
-          <product_id>${item.id_product}</product_id>
-          <product_attribute_id>${item.id_product_attribute || 0}</product_attribute_id>
-          <product_quantity>${item.quantity}</product_quantity>
-        </order_row>`;
-        }
-
-        const secureKey = Array.from({length: 32}, () => Math.floor(Math.random() * 16).toString(16)).join('');
+        const secureKey = Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
 
         let orderXml = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
@@ -311,12 +393,10 @@ async function passerCommande() {
         <module>ps_cashondelivery</module>
         <secure_key>${secureKey}</secure_key>
     <payment>Paiement à la livraison</payment>
-        <total_paid>${totalAmount}</total_paid>
-        <total_paid_real>${totalAmount}</total_paid_real>
-        <total_paid_tax_incl>${totalAmount}</total_paid_tax_incl>
-        <total_paid_tax_excl>${totalAmount}</total_paid_tax_excl>
-        <total_products>${totalAmount}</total_products>
-        <total_products_wt>${totalAmount}</total_products_wt>
+        <total_paid>${cartTotal.toFixed(6)}</total_paid>
+        <total_paid_real>${cartTotal.toFixed(6)}</total_paid_real>
+        <total_products>${cartTotal.toFixed(6)}</total_products>
+        <total_products_wt>${cartTotal.toFixed(6)}</total_products_wt>
         <total_shipping>0.000000</total_shipping>
         <total_shipping_tax_excl>0.000000</total_shipping_tax_excl>
         <total_shipping_tax_incl>0.000000</total_shipping_tax_incl>
@@ -329,47 +409,35 @@ async function passerCommande() {
         <conversion_rate>1.000000</conversion_rate>
         <current_state>${codStateId.value}</current_state>
         <associations>
-            <order_rows>${orderRowsXml}
-            </order_rows>
+            <order_rows>${orderRowsXml}</order_rows>
         </associations>
   </order>
 </prestashop>`;
 
-        console.log('[checkout] order payload:', orderXml);
         let orderResp = await createOrder(orderXml);
-        console.log('[checkout] order response:', orderResp);
         if (orderResp) {
             idOrder.value = extractText(orderResp.id) || '?';
-            const responseState = Number(extractText(orderResp.current_state));
-            console.log('[checkout] state returned by order create:', responseState || '(missing)');
         }
 
         if (idOrder.value && idOrder.value !== '?') {
             const freshOrder = await getOrder(idOrder.value);
             const currentStateAfterCreate = Number(extractText(freshOrder?.current_state));
-            console.log('[checkout] current_state after order reload:', currentStateAfterCreate || '(missing)');
 
             if (currentStateAfterCreate && currentStateAfterCreate !== Number(codStateId.value)) {
-                console.warn('[checkout] Unexpected state after creation. Forcing COD state.', {
-                    expected: Number(codStateId.value),
-                    actual: currentStateAfterCreate,
-                    orderId: idOrder.value
-                });
-
                 await updateOrderStatusByHistory(String(idOrder.value), String(codStateId.value));
+            }
 
-                const updatedOrder = await getOrder(idOrder.value);
-                const updatedState = Number(extractText(updatedOrder?.current_state));
-                console.log('[checkout] current_state after forced update:', updatedState || '(missing)');
+            // DÉCRÉMENTATION DE STOCK FORCÉE
+            for (let i = 0; i < panier.value.length; i++) {
+                let item = panier.value[i];
+                await decrementStock(item.id_product, item.id_product_attribute || 0, item.quantity, idOrder.value);
             }
         }
 
-        // 4. Vider le panier local et afficher la confirmation
-        localStorage.setItem('panier', JSON.stringify([]));
+        localStorage.setItem(getCartStorageKey(), JSON.stringify([]));
         step.value = 'confirmation';
 
     } catch (err) {
-        console.error('[checkout] order flow error:', err?.response?.data || err);
         error.value = 'Une erreur est survenue lors de la commande. Veuillez réessayer.';
     } finally {
         loading.value = false;
@@ -380,7 +448,6 @@ async function passerCommande() {
 <template>
     <div class="checkout-view">
 
-        <!-- ===== ÉTAPES ===== -->
         <div class="stepper">
             <div class="step" :class="{ active: step === 'form', done: step === 'confirmation' }">
                 <div class="step-circle">
@@ -398,9 +465,7 @@ async function passerCommande() {
             </div>
         </div>
 
-        <!-- ===== FORMULAIRE LIVRAISON ===== -->
         <div v-if="step === 'form'" class="checkout-layout">
-
             <div class="form-section">
                 <h2 class="section-title">
                     <Icon icon="lucide:map-pin" />
@@ -450,7 +515,6 @@ async function passerCommande() {
                         <input v-model="form.alias" type="text" placeholder="Domicile" />
                     </div>
 
-                    <!-- Paiement -->
                     <div class="payment-section">
                         <h3 class="payment-title">
                             <Icon icon="lucide:credit-card" />
@@ -480,7 +544,6 @@ async function passerCommande() {
                 </form>
             </div>
 
-            <!-- Résumé commande -->
             <div class="order-summary">
                 <h3 class="summary-title">Votre commande</h3>
                 <div class="summary-items">
@@ -514,7 +577,6 @@ async function passerCommande() {
             </div>
         </div>
 
-        <!-- ===== CONFIRMATION ===== -->
         <div v-if="step === 'confirmation'" class="confirmation">
             <div class="confirmation-icon">
                 <Icon icon="lucide:package-check" />
@@ -539,7 +601,6 @@ async function passerCommande() {
     font-family: 'Inter', sans-serif;
 }
 
-/* === STEPPER === */
 .stepper {
     display: flex;
     align-items: center;
@@ -570,12 +631,7 @@ async function passerCommande() {
     transition: all 0.3s ease;
 }
 
-.step.active .step-circle {
-    border-color: #2ed573;
-    background: #2ed573;
-    color: #fff;
-}
-
+.step.active .step-circle,
 .step.done .step-circle {
     border-color: #2ed573;
     background: #2ed573;
@@ -603,7 +659,6 @@ async function passerCommande() {
     margin-bottom: 28px;
 }
 
-/* === LAYOUT === */
 .checkout-layout {
     display: flex;
     gap: 30px;
@@ -615,7 +670,7 @@ async function passerCommande() {
     background: #fff;
     border-radius: 20px;
     padding: 36px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
 }
 
 .section-title {
@@ -628,7 +683,6 @@ async function passerCommande() {
     margin-bottom: 28px;
 }
 
-/* === ERREUR === */
 .error-banner {
     display: flex;
     align-items: center;
@@ -642,7 +696,6 @@ async function passerCommande() {
     margin-bottom: 20px;
 }
 
-/* === FORMULAIRE === */
 .checkout-form {
     display: flex;
     flex-direction: column;
@@ -689,7 +742,6 @@ async function passerCommande() {
     background: #fff;
 }
 
-/* === PAIEMENT === */
 .payment-section {
     margin-top: 8px;
     padding-top: 24px;
@@ -730,7 +782,6 @@ async function passerCommande() {
     font-size: 1.2rem;
 }
 
-/* === ACTIONS === */
 .form-actions {
     display: flex;
     align-items: center;
@@ -786,18 +837,25 @@ async function passerCommande() {
 }
 
 @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-.spin { animation: spin 1s linear infinite; }
+    from {
+        transform: rotate(0deg);
+    }
 
-/* === RÉSUMÉ === */
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.spin {
+    animation: spin 1s linear infinite;
+}
+
 .order-summary {
     flex: 1;
     background: #fff;
     border-radius: 20px;
     padding: 28px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
     position: sticky;
     top: 84px;
 }
@@ -895,13 +953,12 @@ async function passerCommande() {
     font-weight: 700;
 }
 
-/* === CONFIRMATION === */
 .confirmation {
     text-align: center;
     padding: 80px 20px;
     background: #fff;
     border-radius: 24px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
 }
 
 .confirmation-icon {
@@ -943,8 +1000,16 @@ async function passerCommande() {
 }
 
 @media (max-width: 900px) {
-    .checkout-layout { flex-direction: column; }
-    .order-summary { position: static; }
-    .form-row { flex-direction: column; }
+    .checkout-layout {
+        flex-direction: column;
+    }
+
+    .order-summary {
+        position: static;
+    }
+
+    .form-row {
+        flex-direction: column;
+    }
 }
 </style>
