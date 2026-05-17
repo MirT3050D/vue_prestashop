@@ -1,9 +1,6 @@
 import { getXml, postXml, putXml, deleteXml } from '@/service/api';
 import { runResetForTargets } from '@/service/resetService';
 
-// ============================================================================
-// CONFIGURATION DU ROLLBACK
-// ============================================================================
 export const resetOrderTargets = [
     { key: 'orders', label: 'Commandes', endpoint: '/orders', collectionKey: 'orders', itemKey: 'order', skipIds: [] },
     { key: 'addresses', label: 'Adresses Clients', endpoint: '/addresses', collectionKey: 'addresses', itemKey: 'address', skipIds: [] },
@@ -18,27 +15,27 @@ export const rollbackOrders = async (logCallback) => {
     logCallback('info', 'Réinitialisation terminée.');
 };
 
-// ============================================================================
-// UTILITAIRES DE LECTURE ET DE LOGS DÉTAILLÉS
-// ============================================================================
-function parseAchat(achatString) {
-    if (!achatString || !achatString.includes('[')) return [];
-    const content = achatString.substring(achatString.indexOf('[') + 1, achatString.lastIndexOf(']')).trim();
-    if (!content) return [];
+function cleanQuotes(str) {
+    return str.replace(/[\u2018\u2019\u201A\u201B\u2032\u2039\u0027']/g, "'").replace(/[\u201C\u201D\u201E\u2033\u203A\u0022"]/g, '"').replace(/\u00A0/g, ' ').trim();
+}
 
+function parseAchat(achatString) {
+    if (!achatString) return [];
+    const cleanStr = cleanQuotes(achatString);
+    if (!cleanStr.includes('[')) return [];
+    const content = cleanStr.substring(cleanStr.indexOf('[') + 1, cleanStr.lastIndexOf(']')).trim();
+    if (!content) return [];
     const items = [];
     let currentItem = '';
     let inTuple = false;
-
     for (let i = 0; i < content.length; i++) {
         const char = content[i];
         if (char === '(') { inTuple = true; currentItem = ''; }
         else if (char === ')') { inTuple = false; items.push(currentItem); }
         else if (inTuple) currentItem += char;
     }
-
     return items.map(item => {
-        const parts = item.split(';').map(p => p.replace(/"/g, '').trim());
+        const parts = item.split(';').map(p => cleanQuotes(p).replace(/^"|"$/g, '').trim());
         return { reference: parts[0] || '', quantite: parseInt(parts[1], 10) || 1, variante: parts[2] || '' };
     });
 }
@@ -51,7 +48,6 @@ function generateOrderReference() {
 }
 
 function extractId(node) {
-    // CORRECTION : On ne tombe plus dans le piège du 0 "falsy" !
     if (node === undefined || node === null) return '';
     if (typeof node === 'object') return String(node['#text'] || node['@_id'] || node.id || '');
     return String(node);
@@ -65,103 +61,60 @@ function getLangText(field) {
 
 function formatApiError(error) {
     let msg = error.message;
-    if (error.response) {
-        msg += ` (Statut HTTP: ${error.response.status})`;
-        if (error.response.data) {
-            const dataStr = typeof error.response.data === 'object'
-                ? JSON.stringify(error.response.data)
-                : String(error.response.data);
-            msg += ` | Détail API : ${dataStr.replace(/\n/g, '').substring(0, 500)}`;
-        }
+    if (error.response?.data) {
+        const dataStr = typeof error.response.data === 'object' ? JSON.stringify(error.response.data) : String(error.response.data);
+        msg += ` | Détail API : ${dataStr.replace(/\n/g, '').substring(0, 500)}`;
     }
     return msg;
 }
 
 // ============================================================================
-// SUPER-FONCTION DE MISE À JOUR SÉCURISÉE DU STOCK (Anti-Erreur 400/500)
+// TRACER LE MOUVEMENT SANS TOUCHER AU STOCK PHYSIQUE
 // ============================================================================
-async function forceUpdateStockAvailable(stockAvailable, newQty) {
-    const stId = extractId(stockAvailable.id);
-    const stProductId = extractId(stockAvailable.id_product);
-
-    // CORRECTION : Forçage absolu de l'ID attribut à "0" s'il est vide
-    let stAttrId = extractId(stockAvailable.id_product_attribute);
-    if (stAttrId === '') stAttrId = '0';
-
-    const stShop = extractId(stockAvailable.id_shop) || '1';
-    const stShopGroup = extractId(stockAvailable.id_shop_group) || '0';
-    const stDepends = extractId(stockAvailable.depends_on_stock) || '0';
-    const stOutOfStock = extractId(stockAvailable.out_of_stock) || '2';
-    const stLocation = (typeof stockAvailable.location === 'object' ? '' : stockAvailable.location) || '';
-
-    const stockXml = `<?xml version="1.0" encoding="UTF-8"?>
-    <prestashop><stock_available>
-        <id><![CDATA[${stId}]]></id>
-        <id_product><![CDATA[${stProductId}]]></id_product>
-        <id_product_attribute><![CDATA[${stAttrId}]]></id_product_attribute>
-        <id_shop><![CDATA[${stShop}]]></id_shop>
-        <id_shop_group><![CDATA[${stShopGroup}]]></id_shop_group>
-        <quantity><![CDATA[${newQty}]]></quantity>
-        <depends_on_stock><![CDATA[${stDepends}]]></depends_on_stock>
-        <out_of_stock><![CDATA[${stOutOfStock}]]></out_of_stock>
-        <location><![CDATA[${stLocation}]]></location>
-    </stock_available></prestashop>`;
-
-    await putXml(`/stock_availables/${stId}`, stockXml);
-}
-
-// ============================================================================
-// GESTION DES STOCKS
-// ============================================================================
-// ... (garde tout le haut de ton fichier actuel jusqu'à decrementStock) ...
-
-async function decrementStock(pId, attributeId, quantity, orderId, employeeId, logCallback) {
+async function logOrderMovement(pId, attributeId, quantity, orderId, employeeId, logCallback) {
     try {
+        const dateAdd = new Date().toISOString().slice(0, 19).replace('T', ' ');
         const attrFilter = attributeId ? attributeId : 0;
-        const stockSearch = await getXml(`/stock_availables?filter[id_product]=[${pId}]&filter[id_product_attribute]=[${attrFilter}]&display=full`);
-        let stockAvailable = stockSearch?.prestashop?.stock_availables?.stock_available;
 
-        if (stockAvailable) {
-            if (Array.isArray(stockAvailable)) stockAvailable = stockAvailable[0];
-
-            // CORRECTION : on lit le stock actuel et on calcule la nouvelle valeur absolue
-            const oldQty = parseInt(extractId(stockAvailable.quantity), 10) || 0;
-            const newQty = oldQty - quantity;
-
-            await forceUpdateStockAvailable(stockAvailable, newQty); // ✅ valeur absolue, pas négative
-
-            const dateAdd = new Date().toISOString().slice(0, 19).replace('T', ' ');
-            const baseXml = `
-                <id_product><![CDATA[${pId}]]></id_product>
-                <id_product_attribute><![CDATA[${attrFilter}]]></id_product_attribute>
-                <id_employee><![CDATA[${employeeId}]]></id_employee>
-                <id_stock><![CDATA[0]]></id_stock>
-                <id_stock_mvt_reason><![CDATA[3]]></id_stock_mvt_reason>
-                <physical_quantity><![CDATA[${quantity}]]></physical_quantity>
-                <sign><![CDATA[-1]]></sign>
-                <price_te><![CDATA[0.000000]]></price_te>
-                <date_add><![CDATA[${dateAdd}]]></date_add>
-            `;
-            await postXml('/stock_movements', `<?xml version="1.0" encoding="UTF-8"?>\n<prestashop><stock_mvt>${baseXml}</stock_mvt></prestashop>`);
-            if (logCallback) logCallback('success', `📦 Stock décrémenté pour le produit ${pId} (${oldQty} → ${newQty}).`);
-        }
+        // HACK RESTAURÉ POUR L'INTERFACE : Utilisation de id_order et id_supply_order
+        const baseXml = `
+            <id_order><![CDATA[${pId}]]></id_order>
+            <id_supply_order><![CDATA[${attrFilter}]]></id_supply_order>
+            <referer><![CDATA[${orderId}]]></referer>
+            <id_employee><![CDATA[${employeeId}]]></id_employee>
+            <id_stock><![CDATA[0]]></id_stock>
+            <id_stock_mvt_reason><![CDATA[3]]></id_stock_mvt_reason>
+            <physical_quantity><![CDATA[${quantity}]]></physical_quantity>
+            <sign><![CDATA[-1]]></sign>
+            <price_te><![CDATA[0.000000]]></price_te>
+            <date_add><![CDATA[${dateAdd}]]></date_add>
+        `;
+        await postXml('/stock_movements', `<?xml version="1.0" encoding="UTF-8"?>\n<prestashop><stock_mvt>${baseXml}</stock_mvt></prestashop>`);
+        if (logCallback) logCallback('success', `📦 Mouvement tracé dans l'historique pour le produit ${pId} (-${quantity}).`);
     } catch (e) {
-        if (logCallback) logCallback('warn', `⚠️ Impossible de décrémenter le stock : ${e.message}`);
+        if (logCallback) logCallback('warn', `⚠️ Impossible de tracer le mouvement : ${formatApiError(e)}`);
     }
 }
-// ... (Garde le reste de ton fichier processOrderImport) ...
-// ============================================================================
-// FONCTION PRINCIPALE D'IMPORTATION
-// ============================================================================
+
+async function forceOrderState(orderId, stateId, logCallback) {
+    const payload = `<?xml version="1.0" encoding="UTF-8"?>
+    <prestashop>
+        <order_history>
+            <id_order><![CDATA[${orderId}]]></id_order>
+            <id_order_state><![CDATA[${stateId}]]></id_order_state>
+        </order_history>
+    </prestashop>`;
+    try {
+        await postXml('/order_histories', payload);
+        if (logCallback) logCallback('info', `✅ État de la commande #${orderId} forcé au statut ${stateId}.`);
+    } catch (error) {
+        if (logCallback) logCallback('warn', `⚠️ Impossible de forcer l'état de la commande : ${formatApiError(error)}`);
+    }
+}
+
 export const processOrderImport = async (data, logCallback) => {
     if (!data || data.length === 0) { logCallback('warn', 'CSV vide.'); return; }
-
-    data = data.map(row => {
-        const newRow = {};
-        for (const key in row) newRow[key.trim().toLowerCase()] = row[key];
-        return newRow;
-    });
-
+    data = data.map(row => { const newRow = {}; for (const key in row) newRow[key.trim().toLowerCase()] = row[key]; return newRow; });
     const employeeId = 1;
 
     try {
@@ -214,8 +167,7 @@ export const processOrderImport = async (data, logCallback) => {
 
             let cartRowsXml = '';
             let orderRowsXml = '';
-            let totalPaidHt = 0;
-            let totalPaidTtc = 0;
+            let cartTotal = 0;
             const linesToDecrement = [];
 
             for (const achat of achats) {
@@ -225,45 +177,26 @@ export const processOrderImport = async (data, logCallback) => {
                 if (Array.isArray(prod)) prod = prod[0];
 
                 const pId = extractId(prod.id);
-                let currentItemPriceHt = parseFloat(prod.price) || 0;
+                let basePriceHt = parseFloat(prod.price) || 0;
                 let prodName = getLangText(prod.name) || 'Produit';
-
                 let attributeId = 0;
+
                 if (achat.variante) {
                     const combSearch = await getXml(`/combinations?filter[id_product]=[${pId}]&filter[reference]=[${achat.reference}_${achat.variante}]&display=[id,price]`);
                     let comb = combSearch?.prestashop?.combinations?.combination;
                     if (comb) {
                         attributeId = extractId(Array.isArray(comb) ? comb[0].id : comb.id);
-                        currentItemPriceHt += parseFloat(Array.isArray(comb) ? comb[0].price : comb.price) || 0;
+                        basePriceHt += parseFloat(Array.isArray(comb) ? comb[0].price : comb.price) || 0;
                         prodName += ` - ${achat.variante}`;
                     }
                 }
 
-                const currentItemPriceTtc = currentItemPriceHt * 1.20;
-                totalPaidHt += currentItemPriceHt * achat.quantite;
-                totalPaidTtc += currentItemPriceTtc * achat.quantite;
-
+                const lineTotal = basePriceHt * achat.quantite;
+                cartTotal += lineTotal;
                 linesToDecrement.push({ pId, attributeId, quantity: achat.quantite });
 
-                cartRowsXml += `
-                <cart_row>
-                    <id_product><![CDATA[${pId}]]></id_product>
-                    <id_product_attribute><![CDATA[${attributeId}]]></id_product_attribute>
-                    <id_address_delivery><![CDATA[${addressId}]]></id_address_delivery>
-                    <quantity><![CDATA[${achat.quantite}]]></quantity>
-                </cart_row>`;
-
-                orderRowsXml += `
-                <order_row>
-                    <product_id><![CDATA[${pId}]]></product_id>
-                    <product_attribute_id><![CDATA[${attributeId}]]></product_attribute_id>
-                    <product_quantity><![CDATA[${achat.quantite}]]></product_quantity>
-                    <product_name><![CDATA[${prodName}]]></product_name>
-                    <product_reference><![CDATA[${achat.reference}]]></product_reference>
-                    <product_price><![CDATA[${currentItemPriceHt.toFixed(6)}]]></product_price>
-                    <unit_price_tax_incl><![CDATA[${currentItemPriceTtc.toFixed(6)}]]></unit_price_tax_incl>
-                    <unit_price_tax_excl><![CDATA[${currentItemPriceHt.toFixed(6)}]]></unit_price_tax_excl>
-                </order_row>`;
+                cartRowsXml += `<cart_row><id_product><![CDATA[${pId}]]></id_product><id_product_attribute><![CDATA[${attributeId}]]></id_product_attribute><id_address_delivery><![CDATA[${addressId}]]></id_address_delivery><quantity><![CDATA[${achat.quantite}]]></quantity></cart_row>`;
+                orderRowsXml += `<order_row><product_id><![CDATA[${pId}]]></product_id><product_attribute_id><![CDATA[${attributeId}]]></product_attribute_id><product_quantity><![CDATA[${achat.quantite}]]></product_quantity><product_name><![CDATA[${prodName}]]></product_name><product_reference><![CDATA[${achat.reference}]]></product_reference><product_price><![CDATA[${basePriceHt.toFixed(6)}]]></product_price><unit_price_tax_incl><![CDATA[${basePriceHt.toFixed(6)}]]></unit_price_tax_incl><unit_price_tax_excl><![CDATA[${basePriceHt.toFixed(6)}]]></unit_price_tax_excl></order_row>`;
             }
 
             let formattedDate = new Date().toISOString().slice(0, 10);
@@ -272,73 +205,31 @@ export const processOrderImport = async (data, logCallback) => {
                 if (parts.length === 3) formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
             }
 
-            if (!cartRowsXml) {
-                logCallback('warn', `Panier vide pour la ligne ${index + 1}, ignorée.`);
-                continue;
-            }
+            if (!cartRowsXml) { logCallback('warn', `Panier vide pour la ligne ${index + 1}, ignorée.`); continue; }
 
-            const cartPayload = `<?xml version="1.0" encoding="UTF-8"?>
-            <prestashop><cart>
-                <id_customer><![CDATA[${customerId}]]></id_customer><id_address_delivery><![CDATA[${addressId}]]></id_address_delivery>
-                <id_address_invoice><![CDATA[${addressId}]]></id_address_invoice><id_currency><![CDATA[1]]></id_currency>
-                <id_lang><![CDATA[1]]></id_lang><associations><cart_rows>${cartRowsXml}</cart_rows></associations>
-            </cart></prestashop>`;
+            const cartPayload = `<?xml version="1.0" encoding="UTF-8"?><prestashop><cart><id_customer><![CDATA[${customerId}]]></id_customer><id_address_delivery><![CDATA[${addressId}]]></id_address_delivery><id_address_invoice><![CDATA[${addressId}]]></id_address_invoice><id_currency><![CDATA[1]]></id_currency><id_lang><![CDATA[1]]></id_lang><associations><cart_rows>${cartRowsXml}</cart_rows></associations></cart></prestashop>`;
             const newCartResp = await postXml('/carts', cartPayload);
             const cartId = extractId(newCartResp?.prestashop?.cart?.id);
 
-            if (!etatRaw || etatRaw === '') {
-                logCallback('warn', `Ligne ${index + 1} : Panier Abandonné #${cartId} conservé.`);
-                continue;
-            }
+            if (!etatRaw || etatRaw === '') { logCallback('warn', `Ligne ${index + 1} : Panier Abandonné #${cartId} conservé.`); continue; }
 
             const orderStateId = (etatRaw.includes('accept') || etatRaw.includes('pay')) ? 2 : 6;
             const orderRef = generateOrderReference();
 
-            const orderPayload = `<?xml version="1.0" encoding="UTF-8"?>
-            <prestashop><order>
-                <id_address_delivery><![CDATA[${addressId}]]></id_address_delivery>
-                <id_address_invoice><![CDATA[${addressId}]]></id_address_invoice>
-                <id_cart><![CDATA[${cartId}]]></id_cart>
-                <id_currency><![CDATA[1]]></id_currency><id_lang><![CDATA[1]]></id_lang>
-                <id_customer><![CDATA[${customerId}]]></id_customer><id_carrier><![CDATA[1]]></id_carrier>
-                <id_shop_group><![CDATA[1]]></id_shop_group><id_shop><![CDATA[1]]></id_shop>
-                <current_state><![CDATA[${orderStateId}]]></current_state>
-                <reference><![CDATA[${orderRef}]]></reference>
-                <module><![CDATA[ps_cashondelivery]]></module>
-                <payment><![CDATA[Paiement à la livraison]]></payment>
-                
-                <total_paid><![CDATA[${totalPaidTtc.toFixed(6)}]]></total_paid>
-                <total_paid_real><![CDATA[${orderStateId === 2 ? totalPaidTtc.toFixed(6) : '0.000000'}]]></total_paid_real>
-                <total_products><![CDATA[${totalPaidHt.toFixed(6)}]]></total_products>
-                <total_products_wt><![CDATA[${totalPaidTtc.toFixed(6)}]]></total_products_wt>
-                
-                <total_shipping><![CDATA[0.000000]]></total_shipping>
-                <total_shipping_tax_incl><![CDATA[0.000000]]></total_shipping_tax_incl>
-                <total_shipping_tax_excl><![CDATA[0.000000]]></total_shipping_tax_excl>
-                <total_discounts><![CDATA[0.000000]]></total_discounts>
-                <total_wrapping><![CDATA[0.000000]]></total_wrapping>
-
-                <conversion_rate><![CDATA[1.000000]]></conversion_rate>
-                <date_add><![CDATA[${formattedDate} 12:00:00]]></date_add>
-                <date_upd><![CDATA[${formattedDate} 12:00:00]]></date_upd>
-                <associations><order_rows>${orderRowsXml}</order_rows></associations>
-            </order></prestashop>`;
+            const orderPayload = `<?xml version="1.0" encoding="UTF-8"?><prestashop><order><id_address_delivery><![CDATA[${addressId}]]></id_address_delivery><id_address_invoice><![CDATA[${addressId}]]></id_address_invoice><id_cart><![CDATA[${cartId}]]></id_cart><id_currency><![CDATA[1]]></id_currency><id_lang><![CDATA[1]]></id_lang><id_customer><![CDATA[${customerId}]]></id_customer><id_carrier><![CDATA[1]]></id_carrier><id_shop_group><![CDATA[1]]></id_shop_group><id_shop><![CDATA[1]]></id_shop><current_state><![CDATA[${orderStateId}]]></current_state><reference><![CDATA[${orderRef}]]></reference><module><![CDATA[ps_wirepayment]]></module><payment><![CDATA[Paiement importé]]></payment><total_paid><![CDATA[${cartTotal.toFixed(6)}]]></total_paid><total_paid_real><![CDATA[${cartTotal.toFixed(6)}]]></total_paid_real><total_products><![CDATA[${cartTotal.toFixed(6)}]]></total_products><total_products_wt><![CDATA[${cartTotal.toFixed(6)}]]></total_products_wt><total_shipping><![CDATA[0.000000]]></total_shipping><total_shipping_tax_incl><![CDATA[0.000000]]></total_shipping_tax_incl><total_shipping_tax_excl><![CDATA[0.000000]]></total_shipping_tax_excl><total_discounts><![CDATA[0.000000]]></total_discounts><total_wrapping><![CDATA[0.000000]]></total_wrapping><conversion_rate><![CDATA[1.000000]]></conversion_rate><date_add><![CDATA[${formattedDate} 12:00:00]]></date_add><date_upd><![CDATA[${formattedDate} 12:00:00]]></date_upd><associations><order_rows>${orderRowsXml}</order_rows></associations></order></prestashop>`;
 
             const newOrderResp = await postXml('/orders', orderPayload);
             const orderId = extractId(newOrderResp?.prestashop?.order?.id);
 
             if (orderId) {
+                await forceOrderState(orderId, orderStateId, logCallback);
                 for (const line of linesToDecrement) {
-                    await decrementStock(line.pId, line.attributeId, line.quantity, orderId, employeeId, logCallback);
+                    await logOrderMovement(line.pId, line.attributeId, line.quantity, orderId, employeeId, logCallback);
                 }
-                logCallback('success', `Commande ID ${orderId} importée avec détails et totaux.`);
+                logCallback('success', `Commande ID ${orderId} importée avec succès.`);
             } else {
                 logCallback('error', `Échec de création de la commande à la ligne ${index + 1}. Suppression du panier fantôme.`);
-                try {
-                    await deleteXml(`/carts/${cartId}`);
-                } catch (delErr) {
-                    logCallback('warn', `Impossible de supprimer le panier fantôme ${cartId} : ${formatApiError(delErr)}`);
-                }
+                try { await deleteXml(`/carts/${cartId}`); } catch (delErr) { logCallback('warn', `Impossible de supprimer le panier fantôme ${cartId}`); }
             }
         }
         logCallback('success', 'Importation terminée !');

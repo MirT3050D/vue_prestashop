@@ -20,27 +20,17 @@ function extractId(node) {
 
 function formatApiError(error) {
   let msg = error.message;
-  if (error.response) {
-    msg += ` (Statut HTTP: ${error.response.status})`;
-    if (error.response.data) {
-      const dataStr = typeof error.response.data === 'object' ? JSON.stringify(error.response.data) : String(error.response.data);
-      msg += ` | Détail API : ${dataStr.replace(/\n/g, '').substring(0, 500)}`;
-    }
+  if (error.response?.data) {
+    const dataStr = typeof error.response.data === 'object' ? JSON.stringify(error.response.data) : String(error.response.data);
+    msg += ` | Détail : ${dataStr.substring(0, 200)}`;
   }
   return msg;
-}
-
-// FIX #4 : Nettoyage robuste des valeurs numériques du CSV (guillemets + virgule)
-function parseNumber(value) {
-  if (value === undefined || value === null || String(value).trim() === '') return null;
-  return parseFloat(String(value).replace(/['"]/g, '').replace(',', '.'));
 }
 
 // ----------------------------------------------------------------------------
 // FONCTIONS API
 // ----------------------------------------------------------------------------
-async function forceUpdateStockAvailable(stockAvailable, absoluteQty) {
-  // FIX #1 : On envoie la quantité ABSOLUE (pas un delta) dans le PUT
+async function forceUpdateStockAvailable(stockAvailable, valueToSend) {
   const stId = extractId(stockAvailable.id);
   const stProductId = extractId(stockAvailable.id_product);
   let stAttrId = extractId(stockAvailable.id_product_attribute);
@@ -59,7 +49,7 @@ async function forceUpdateStockAvailable(stockAvailable, absoluteQty) {
       <id_product_attribute><![CDATA[${stAttrId}]]></id_product_attribute>
       <id_shop><![CDATA[${stShop}]]></id_shop>
       <id_shop_group><![CDATA[${stShopGroup}]]></id_shop_group>
-      <quantity><![CDATA[${absoluteQty}]]></quantity>
+      <quantity><![CDATA[${valueToSend}]]></quantity> 
       <depends_on_stock><![CDATA[${stDepends}]]></depends_on_stock>
       <out_of_stock><![CDATA[${stOutOfStock}]]></out_of_stock>
       <location><![CDATA[${stLocation}]]></location>
@@ -68,11 +58,11 @@ async function forceUpdateStockAvailable(stockAvailable, absoluteQty) {
   await putXml(`/stock_availables/${stId}`, stockXml);
 }
 
-async function forceStockMovement(productId, attributeId, employeeId, reasonId, delta, sign, dateAdd, logCallback) {
-  // FIX #3 : Utilisation des bons champs id_product / id_product_attribute
+async function forceStockMovement(parentProductId, attributeId, employeeId, reasonId, delta, sign, dateAdd, logCallback) {
+  // RESTAURATION DU HACK : Utilisation de id_order et id_supply_order pour que StockEvolution.vue retrouve les noms !
   const baseXml = `
-      <id_product><![CDATA[${productId}]]></id_product>
-      <id_product_attribute><![CDATA[${attributeId}]]></id_product_attribute>
+      <id_order><![CDATA[${parentProductId}]]></id_order>
+      <id_supply_order><![CDATA[${attributeId}]]></id_supply_order>
       <id_employee><![CDATA[${employeeId}]]></id_employee>
       <id_stock><![CDATA[0]]></id_stock>
       <id_stock_mvt_reason><![CDATA[${reasonId}]]></id_stock_mvt_reason>
@@ -84,12 +74,12 @@ async function forceStockMovement(productId, attributeId, employeeId, reasonId, 
   try {
     await postXml('/stock_movements', `<?xml version="1.0" encoding="UTF-8"?>\n<prestashop><stock_mvt>${baseXml}</stock_mvt></prestashop>`);
   } catch (error) {
-    if (logCallback) logCallback('warn', `Erreur log mouvement : ${formatApiError(error)}`);
+    if (logCallback) logCallback('warn', `Erreur historique stock : ${formatApiError(error)}`);
   }
 }
 
 // ----------------------------------------------------------------------------
-// FONCTION PRINCIPALE
+// TRAITEMENT GLOBAL DES VARIATIONS
 // ----------------------------------------------------------------------------
 export const processVariantImport = async (data, logCallback) => {
   const optionCache = {};
@@ -97,30 +87,19 @@ export const processVariantImport = async (data, logCallback) => {
   const employeeId = 1;
 
   if (!data || data.length === 0) return;
-  data = data.map(row => {
-    const newRow = {};
-    for (const key in row) newRow[key.trim().toLowerCase()] = row[key];
-    return newRow;
-  });
+  data = data.map(row => { const newRow = {}; for (const key in row) newRow[key.trim().toLowerCase()] = row[key]; return newRow; });
 
   try {
-    for (const [index, row] of data.entries()) {
+    for (const row of data) {
       if (!row.reference || String(row.reference).trim() === '') continue;
 
       const reference = String(row.reference).trim();
       const specificite = row['specificité'] ? String(row['specificité']).trim() : '';
-
-      // FIX #2 : Normalisation de la casse pour matcher les valeurs en base (ex: "ngoza" → "Ngoza")
-      const karazanyRaw = row.karazany ? String(row.karazany).trim() : '';
-      const karazany = karazanyRaw.charAt(0).toUpperCase() + karazanyRaw.slice(1).toLowerCase();
-
+      const karazany = row.karazany ? String(row.karazany).trim() : '';
       const stockRaw = row.stock_initial ? String(row.stock_initial).trim() : '';
-      // FIX #4 : Utilisation de parseNumber pour gérer guillemets et virgules
-      const stockInitialParsed = parseNumber(stockRaw);
-      let stockInitial = stockInitialParsed !== null ? stockInitialParsed : 0;
 
-      const prixParsed = parseNumber(row.prix_vente_ttc);
-      let prixVenteTTC = prixParsed !== null ? prixParsed : 0;
+      let stockInitial = stockRaw !== '' ? parseInt(stockRaw, 10) : 0;
+      let prixVenteTTC = row.prix_vente_ttc ? parseFloat(String(row.prix_vente_ttc).replace(',', '.')) : 0;
 
       const productSearch = await getXml(`/products?filter[reference]=[${reference}]&display=[id,price,name]`);
       let parentProduct = productSearch?.prestashop?.products?.product;
@@ -130,9 +109,6 @@ export const processVariantImport = async (data, logCallback) => {
       const parentProductId = extractId(parentProduct.id);
       const dateAdd = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
-      // ======================================================================
-      // PRODUIT SIMPLE
-      // ======================================================================
       if (!specificite || !karazany) {
         if (stockRaw !== '') {
           try {
@@ -141,41 +117,25 @@ export const processVariantImport = async (data, logCallback) => {
 
             if (stockAvailable) {
               if (Array.isArray(stockAvailable)) stockAvailable = stockAvailable[0];
-              const stId = extractId(stockAvailable.id);
               const oldQty = parseInt(extractId(stockAvailable.quantity), 10) || 0;
-              // FIX #1 : delta sert uniquement pour le mouvement, pas pour le PUT
               const delta = stockInitial - oldQty;
 
-              logCallback('info', `🧪 [AUDIT SIMPLE] Produit: ${reference} (ID: ${parentProductId})`);
-              logCallback('info', `🧪 [1] Stock Actuel (Base) : ${oldQty} | Cible (CSV) : ${stockInitial} | Delta : ${delta}`);
-
-              // On envoie la valeur ABSOLUE au PUT
               await forceUpdateStockAvailable(stockAvailable, stockInitial);
-
-              const check1 = await getXml(`/stock_availables/${stId}`);
-              const qtyAfterPut = parseInt(extractId(check1?.prestashop?.stock_available?.quantity), 10) || 0;
-              logCallback('info', `🧪 [2] Stock APRÈS le PUT : ${qtyAfterPut}`);
 
               if (delta !== 0) {
                 const sign = delta > 0 ? 1 : -1;
                 const reasonId = delta > 0 ? 11 : 12;
                 await forceStockMovement(parentProductId, 0, employeeId, reasonId, delta, sign, dateAdd, logCallback);
-
-                const check2 = await getXml(`/stock_availables/${stId}`);
-                const qtyAfterPost = parseInt(extractId(check2?.prestashop?.stock_available?.quantity), 10) || 0;
-                logCallback('info', `🧪 [3] Stock APRÈS le Mouvement (POST) : ${qtyAfterPost}`);
               }
+              logCallback('success', `Stock du produit simple ${reference} mis à jour à ${stockInitial}.`);
             }
           } catch (stockErr) {
-            logCallback('error', `Erreur stock ${reference} : ${formatApiError(stockErr)}`);
+            logCallback('error', `Erreur stock produit simple ${reference} : ${formatApiError(stockErr)}`);
           }
         }
         continue;
       }
 
-      // ======================================================================
-      // PRODUIT AVEC DÉCLINAISONS
-      // ======================================================================
       let optionId = optionCache[specificite];
       if (!optionId) {
         const optSearch = await getXml(`/product_options?filter[name]=[${specificite}]&display=[id]`);
@@ -188,7 +148,6 @@ export const processVariantImport = async (data, logCallback) => {
         optionCache[specificite] = optionId;
       }
 
-      // FIX #2 : Recherche avec la valeur normalisée (ex: "Ngoza") pour éviter les doublons
       const optValKey = `${optionId}_${karazany}`;
       let optionValueId = optionValueCache[optValKey];
       if (!optionValueId) {
@@ -213,40 +172,26 @@ export const processVariantImport = async (data, logCallback) => {
 
           if (stockAvailable) {
             if (Array.isArray(stockAvailable)) stockAvailable = stockAvailable[0];
-            const stId = extractId(stockAvailable.id);
             const oldQty = parseInt(extractId(stockAvailable.quantity), 10) || 0;
-            // FIX #1 : delta sert uniquement pour le mouvement
             const delta = stockInitial - oldQty;
 
-            logCallback('info', `🧪 [AUDIT DÉCLINAISON] Produit: ${reference}_${karazany} (AttrID: ${combinationId})`);
-            logCallback('info', `🧪 [1] Stock Actuel (Base) : ${oldQty} | Cible (CSV) : ${stockInitial} | Delta : ${delta}`);
-
-            // On envoie la valeur ABSOLUE au PUT
             await forceUpdateStockAvailable(stockAvailable, stockInitial);
-
-            const check1 = await getXml(`/stock_availables/${stId}`);
-            const qtyAfterPut = parseInt(extractId(check1?.prestashop?.stock_available?.quantity), 10) || 0;
-            logCallback('info', `🧪 [2] Stock APRÈS le PUT : ${qtyAfterPut}`);
 
             if (delta !== 0) {
               const sign = delta > 0 ? 1 : -1;
               const reasonId = delta > 0 ? 11 : 12;
               await forceStockMovement(parentProductId, combinationId, employeeId, reasonId, delta, sign, dateAdd, logCallback);
-
-              const check2 = await getXml(`/stock_availables/${stId}`);
-              const qtyAfterPost = parseInt(extractId(check2?.prestashop?.stock_available?.quantity), 10) || 0;
-              logCallback('info', `🧪 [3] Stock APRÈS le Mouvement (POST) : ${qtyAfterPost}`);
             }
-            logCallback('success', `Fin du traitement pour ${karazany}.`);
+            logCallback('success', `Stock de la déclinaison (${karazany}) synchronisé (${stockInitial} unités).`);
           }
         } catch (stockError) {
           logCallback('error', `Impossible de fixer le stock : ${formatApiError(stockError)}`);
         }
       }
     }
-    logCallback('success', 'Import des variations terminé !');
+    logCallback('success', 'Import des variations terminé avec succès !');
   } catch (error) {
-    logCallback('error', `Erreur globale : ${formatApiError(error)}`);
+    logCallback('error', `Erreur lors de l'import des variations : ${formatApiError(error)}`);
     await rollbackDeclinaison(logCallback);
   }
 };
