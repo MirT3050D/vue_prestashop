@@ -1,21 +1,42 @@
 <script setup>
 import { onMounted, ref, computed } from 'vue';
-import { Icon } from '@iconify/vue';
 import { getProducts } from '@/service/productService';
 import { getStockAvailables, updateProductStock } from '@/service/stockService';
+import { getXml, postXml } from '@/service/api';
+import Loading from '@/components/Loading.vue';
 
 // ============================================================================
-// VARIABLES D'ÉTAT RÉACTIVES
+// VARIABLES D'ÉTAT
 // ============================================================================
-const items = ref([]);          // Contient la liste plate de nos lignes de stock rattachées
-const loading = ref(true);       // Gère le chargement initial de la page
-const searchTxt = ref('');       // Filtre textuel de recherche
-const stockFilter = ref('all');  // Filtre de quantité ('all', 'low', 'empty')
-const message = ref('');         // Bannière d'alerte textuelle
-const messageType = ref('');     // Type d'alerte ('success' ou 'error')
+const items = ref([]);
+const loading = ref(true);
+const searchTxt = ref('');
+const message = ref('');
+const messageType = ref('');
 
 // ============================================================================
-// CHARGEMENT ET CORRÉLATION DES DONNÉES (API MAPPER)
+// UTILITAIRES
+// ============================================================================
+function extractId(node) {
+    if (!node) return '0';
+    if (typeof node === 'object') return String(node['#text'] || node['@_id'] || node.id || '0');
+    return String(node);
+}
+
+function getLangText(field) {
+    if (!field || !field.language) return 'Produit inconnu';
+    if (Array.isArray(field.language)) return field.language[0]['#text'];
+    return field.language['#text'];
+}
+
+function triggerBanner(msg, type) {
+    message.value = msg;
+    messageType.value = type;
+    setTimeout(() => { message.value = ''; }, 4000);
+}
+
+// ============================================================================
+// CHARGEMENT INTELLIGENT DES STOCKS
 // ============================================================================
 async function loadStockDashboard() {
     loading.value = true;
@@ -23,384 +44,272 @@ async function loadStockDashboard() {
     message.value = '';
 
     try {
-        // 1. On télécharge en parallèle la liste des produits et la grille des stocks
-        const productsList = await getProducts('display=full');
-        const stocksList = await getStockAvailables('display=full');
+        // 1. Récupération parallèle de TOUTES les données nécessaires
+        const [productsList, stocksList, responseCombs] = await Promise.all([
+            getProducts('display=full'),
+            getStockAvailables('display=full'),
+            getXml('/combinations?display=full')
+        ]);
 
+        const combinationsList = responseCombs?.prestashop?.combinations?.combination || [];
+        const combs = Array.isArray(combinationsList) ? combinationsList : [combinationsList];
+
+        // 2. Détection des produits possédant des déclinaisons
+        const productsWithVariants = new Set();
+        stocksList.forEach(stock => {
+            if (extractId(stock.id_product_attribute) !== '0') {
+                productsWithVariants.add(extractId(stock.id_product));
+            }
+        });
+
+        // 3. Construction du tableau filtré
         const tempItems = [];
+        for (const stock of stocksList) {
+            const pId = extractId(stock.id_product);
+            const attrId = extractId(stock.id_product_attribute);
 
-        // 2. Double boucle for classique pour croiser les données sans fonctions complexes
-        for (let i = 0; i < stocksList.length; i++) {
-            const stock = stocksList[i];
+            // LOGIQUE CLÉ : Si le produit a des variantes, on ignore sa ligne globale "0" (qui fausse le total)
+            if (productsWithVariants.has(pId) && attrId === '0') {
+                continue;
+            }
 
-            // Extraction sécurisée des identifiants (gère si PrestaShop renvoie un objet XML ou une valeur brute)
-            const prodId = stock.id_product && typeof stock.id_product === 'object' ? stock.id_product['#text'] : stock.id_product;
-            const attrId = stock.id_product_attribute && typeof stock.id_product_attribute === 'object' ? stock.id_product_attribute['#text'] : stock.id_product_attribute;
-            const stockId = stock.id && typeof stock.id === 'object' ? stock.id['#text'] : stock.id;
-            const qty = parseInt(stock.quantity && typeof stock.quantity === 'object' ? stock.quantity['#text'] : stock.quantity, 10) || 0;
+            const product = productsList.find(p => extractId(p.id) === pId);
+            if (!product) continue;
 
-            // Recherche du produit parent correspondant à la ligne de stock
-            let matchingProduct = null;
-            for (let j = 0; j < productsList.length; j++) {
-                if (String(productsList[j].id) === String(prodId)) {
-                    matchingProduct = productsList[j];
-                    break;
+            // Extraction du joli nom de la déclinaison
+            let variantName = '-';
+            if (attrId !== '0') {
+                const comb = combs.find(c => extractId(c.id) === attrId);
+                if (comb && comb.reference) {
+                    const parts = comb.reference.split('_');
+                    variantName = parts.length > 1 ? parts.slice(1).join(' ') : comb.reference;
+                } else {
+                    variantName = `Var #${attrId}`; // Sécurité
                 }
             }
 
-            // Si le produit existe, on enrichit l'élément pour l'affichage de notre tableau
-            if (matchingProduct) {
-                let prodName = '';
-                const nameNode = matchingProduct.name ? matchingProduct.name.language : null;
-                if (Array.isArray(nameNode)) {
-                    prodName = nameNode[0]['#text'];
-                } else if (nameNode) {
-                    prodName = nameNode['#text'] || nameNode;
-                }
+            const qty = parseInt(stock.quantity['#text'] || stock.quantity, 10) || 0;
 
-                const baseRef = matchingProduct.reference || 'REF-' + prodId;
-                let typeLabel = 'Produit Simple';
-                let displayRef = baseRef;
-
-                // Si l'ID attribut est différent de 0, c'est une déclinaison/variante physique du produit
-                if (String(attrId) !== '0') {
-                    typeLabel = 'Déclinaison';
-                    displayRef = baseRef + ' (Var #' + attrId + ')';
-                }
-
-                tempItems.push({
-                    id: stockId,
-                    id_product: prodId,
-                    id_product_attribute: attrId,
-                    name: prodName,
-                    reference: displayRef,
-                    type: typeLabel,
-                    quantity: qty,
-                    isSaving: false // Gère l'état d'attente du bouton de sauvegarde de cette ligne
-                });
-            }
+            tempItems.push({
+                id: extractId(stock.id),
+                id_product: pId,
+                id_product_attribute: attrId,
+                name: getLangText(product.name),
+                reference: product.reference || '',
+                variantName: variantName,
+                quantity: qty,
+                editable_quantity: qty,
+                is_saving: false
+            });
         }
 
-        items.value = tempItems;
+        // Tri par nom de produit
+        items.value = tempItems.sort((a, b) => a.name.localeCompare(b.name));
 
     } catch (error) {
-        console.error("Erreur lors du chargement du tableau de bord des stocks:", error);
-        message.value = "Impossible de synchroniser les stocks avec PrestaShop.";
-        messageType.value = "error";
+        console.error("Erreur de chargement :", error);
+        triggerBanner("Erreur de connexion à l'API PrestaShop.", "error");
     } finally {
         loading.value = false;
     }
 }
 
 // ============================================================================
-// ACTION DE MISE À JOUR (SAUVEGARDE EN LIVE)
+// SAUVEGARDE MANUELLE AVEC TRAÇABILITÉ (HACK MYSQL INTÉGRÉ)
 // ============================================================================
-async function sauvegarderLigneStock(item) {
-    item.isSaving = true;
-    message.value = '';
+async function handleSaveStock(item) {
+    if (item.editable_quantity < 0 || isNaN(item.editable_quantity)) {
+        triggerBanner("La quantité ne peut pas être négative.", "error");
+        return;
+    }
 
+    item.is_saving = true;
     try {
-        // Appel de notre fonction utilitaire du service stock
-        const success = await updateProductStock(item.id_product, item.id_product_attribute, item.quantity);
+        const diff = item.editable_quantity - item.quantity;
 
-        if (success) {
-            message.value = "Stock mis à jour avec succès pour " + item.name + " (" + item.reference + ").";
-            messageType.value = "success";
-        } else {
-            message.value = "Erreur de traitement de la quantité côté serveur.";
-            messageType.value = "error";
+        // 1. Mise à jour réelle via l'API
+        await updateProductStock(item.id_product, item.id_product_attribute, item.editable_quantity);
+
+        // 2. Traçabilité forcée avec nos IDs cachés pour StockEvolution.vue !
+        if (diff !== 0) {
+            const sign = diff > 0 ? 1 : -1;
+            const reasonId = diff > 0 ? 11 : 12; // 11=Ajustement Positif, 12=Ajustement Négatif
+            const dateAdd = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+            const mvtXml = `<?xml version="1.0" encoding="UTF-8"?>
+            <prestashop>
+                <stock_mvt>
+                    <id_order><![CDATA[${item.id_product}]]></id_order>
+                    <id_supply_order><![CDATA[${item.id_product_attribute}]]></id_supply_order>
+                    <id_employee><![CDATA[1]]></id_employee>
+                    <id_stock><![CDATA[0]]></id_stock>
+                    <id_stock_mvt_reason><![CDATA[${reasonId}]]></id_stock_mvt_reason>
+                    <physical_quantity><![CDATA[${Math.abs(diff)}]]></physical_quantity>
+                    <sign><![CDATA[${sign}]]></sign>
+                    <price_te><![CDATA[0.000000]]></price_te>
+                    <date_add><![CDATA[${dateAdd}]]></date_add>
+                </stock_mvt>
+            </prestashop>`;
+
+            await postXml('/stock_movements', mvtXml);
         }
-    } catch (err) {
-        console.error("Échec du PUT stock:", err);
-        message.value = "Erreur réseau lors de la modification de la quantité.";
-        messageType.value = "error";
+
+        item.quantity = item.editable_quantity;
+        triggerBanner(`Stock mis à jour pour "${item.name}".`, "success");
+
+    } catch (error) {
+        console.error("Erreur de sauvegarde:", error);
+        triggerBanner("Erreur lors de la sauvegarde.", "error");
     } finally {
-        item.isSaving = false;
+        item.is_saving = false;
     }
 }
 
-// ============================================================================
-// PROPRIÉTÉ CALCULÉE : FILTRAGE ET RECHERCHE LOCALE (UX ULTRA-RAPIDE)
-// ============================================================================
-const filteredItems = computed(function () {
-    const search = searchTxt.value.toLowerCase().trim();
-    const result = [];
-
-    for (let i = 0; i < items.value.length; i++) {
-        const item = items.value[i];
-
-        // 1. Filtrage par texte (Nom ou Référence)
-        const matchText = item.name.toLowerCase().includes(search) || item.reference.toLowerCase().includes(search);
-
-        // 2. Filtrage par état quantitatif
-        let matchStock = false;
-        if (stockFilter.value === 'all') {
-            matchStock = true;
-        } else if (stockFilter.value === 'low') {
-            matchStock = item.quantity > 0 && item.quantity <= 5; // Moins de 5 articles restants
-        } else if (stockFilter.value === 'empty') {
-            matchStock = item.quantity === 0; // Rupture complète
-        }
-
-        if (matchText && matchStock) {
-            result.push(item);
-        }
-    }
-    return result;
+const filteredItems = computed(() => {
+    return items.value.filter(item => {
+        const matchTxt = item.name.toLowerCase().includes(searchTxt.value.toLowerCase()) ||
+            item.reference.toLowerCase().includes(searchTxt.value.toLowerCase());
+        return matchTxt;
+    });
 });
 
-// Montage du composant
-onMounted(function () {
-    loadStockDashboard();
-});
+onMounted(loadStockDashboard);
 </script>
 
 <template>
-    <div class="stock-container">
-        <header class="stock-header">
-            <div>
-                <h1>Gestion des Stocks</h1>
-                <p class="subtitle">Pilotez les quantités disponibles en boutique et traitez les ruptures</p>
-            </div>
-            <button class="btn-refresh" @click="loadStockDashboard" :disabled="loading">
-                <Icon icon="lucide:refresh-cw" :class="{ 'spin': loading }" />
-                Synchroniser
-            </button>
-        </header>
+    <div class="stock-dashboard">
+        <Loading :isLoading="loading" />
+
+        <div class="header-section">
+            <h1>Gestion des Stocks</h1>
+            <p>Gérez les quantités de vos produits et déclinaisons en temps réel.</p>
+        </div>
 
         <div v-if="message" :class="['alert-banner', messageType]">
-            <Icon :icon="messageType === 'success' ? 'lucide:check-circle' : 'lucide:alert-circle'" />
-            <span>{{ message }}</span>
-            <button class="alert-close" @click="message = ''">
-                <Icon icon="lucide:x" />
-            </button>
+            {{ message }}
         </div>
 
-        <section class="toolbar-card">
-            <div class="search-box">
-                <Icon icon="lucide:search" class="search-icon" />
-                <input type="text" v-model="searchTxt" placeholder="Rechercher par nom de produit ou référence...">
-            </div>
-
-            <div class="filter-group">
-                <label>État du stock :</label>
-                <select v-model="stockFilter">
-                    <option value="all">Tous les articles</option>
-                    <option value="low">⚠️ Stocks bas (1 à 5)</option>
-                    <option value="empty">🚨 En rupture (0)</option>
-                </select>
-            </div>
-        </section>
-
-        <div v-if="loading" class="loading-state">
-            <Icon icon="lucide:loader-2" class="spin-loader" />
-            <h2>Analyse de la base de données...</h2>
-            <p>Nous croisons la liste des produits avec les entrées de stock de PrestaShop.</p>
+        <div class="toolbar">
+            <input v-model="searchTxt" type="text" placeholder="Rechercher un produit (Nom, Réf...)"
+                class="search-input" />
         </div>
 
-        <div v-else-if="filteredItems.length > 0" class="table-wrapper">
+        <div class="table-container">
             <table class="stock-table">
                 <thead>
                     <tr>
-                        <th>Réf. Produit</th>
-                        <th>Nom de l'article</th>
-                        <th>Type</th>
-                        <th class="center-text">Quantité Actuelle</th>
-                        <th class="center-text">Statut</th>
-                        <th class="right-text">Actions</th>
+                        <th>Réf.</th>
+                        <th>Article concerné</th>
+                        <th>Déclinaison</th>
+                        <th>Quantité Dispo.</th>
+                        <th>Ajuster le stock</th>
+                        <th>Action</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <tr v-for="item in filteredItems" :key="item.id"
-                        :class="{ 'row-empty': item.quantity === 0, 'row-low': item.quantity > 0 && item.quantity <= 5 }">
-                        <td class="font-mono">{{ item.reference }}</td>
-                        <td class="font-bold">{{ item.name }}</td>
+                    <tr v-for="item in filteredItems" :key="item.id">
+                        <td><span class="ref-badge">{{ item.reference || 'N/A' }}</span></td>
+                        <td><strong>{{ item.name }}</strong></td>
+
                         <td>
-                            <span :class="['badge-type', item.type === 'Déclinaison' ? 'variant' : 'simple']">
-                                {{ item.type }}
+                            <span v-if="item.variantName !== '-'" class="variant-badge">{{ item.variantName }}</span>
+                            <span v-else class="text-muted">Produit standard</span>
+                        </td>
+
+                        <td>
+                            <span
+                                :class="['qty-badge', item.quantity > 5 ? 'qty-ok' : (item.quantity > 0 ? 'qty-low' : 'qty-empty')]">
+                                {{ item.quantity }}
                             </span>
                         </td>
-                        <td class="center-text">
-                            <input type="number" v-model.number="item.quantity" min="0" class="input-qty"
-                                :disabled="item.isSaving">
+
+                        <td>
+                            <input type="number" v-model="item.editable_quantity" class="qty-input" min="0" />
                         </td>
-                        <td class="center-text">
-                            <span v-if="item.quantity === 0" class="stock-tag status-empty">Rupture</span>
-                            <span v-else-if="item.quantity <= 5" class="stock-tag status-low">Stock Bas</span>
-                            <span v-else class="stock-tag status-ok">Disponible</span>
-                        </td>
-                        <td class="right-text">
-                            <button class="btn-save" @click="sauvegarderLigneStock(item)" :disabled="item.isSaving">
-                                <Icon :icon="item.isSaving ? 'lucide:loader-2' : 'lucide:save'"
-                                    :class="{ 'spin': item.isSaving }" />
-                                {{ item.isSaving ? 'Envoi...' : 'Mettre à jour' }}
+
+                        <td>
+                            <button @click="handleSaveStock(item)"
+                                :disabled="item.is_saving || item.quantity === item.editable_quantity" class="btn-save">
+                                {{ item.is_saving ? '...' : 'Sauvegarder' }}
                             </button>
                         </td>
                     </tr>
                 </tbody>
             </table>
-        </div>
 
-        <div v-else class="empty-state">
-            <Icon icon="lucide:package-open" class="empty-icon" />
-            <h2>Aucune ligne de stock trouvée</h2>
-            <p>Aucun produit ne correspond à vos critères de recherche actuels.</p>
+            <div v-if="filteredItems.length === 0 && !loading" class="empty-state">
+                Aucun produit trouvé.
+            </div>
         </div>
     </div>
 </template>
 
 <style scoped>
-.stock-container {
-    max-width: 1200px;
-    margin: 40px auto;
-    padding: 0 20px;
-    font-family: 'Inter', sans-serif;
-}
-
-/* === EN-TÊTE === */
-.stock-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 30px;
-}
-
-.stock-header h1 {
-    font-size: 2.2rem;
-    font-weight: 800;
-    color: #2f3542;
-    margin: 0 0 6px 0;
-}
-
-.subtitle {
-    font-size: 1.05rem;
-    color: #747d8c;
-    margin: 0;
-}
-
-.btn-refresh {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background-color: #2f3542;
-    color: white;
-    border: none;
-    padding: 12px 20px;
-    border-radius: 10px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background-color 0.2s;
-}
-
-.btn-refresh:hover {
-    background-color: #1e222b;
-}
-
-/* === BARRE DE RECHERCHE ET FILTRES === */
-.toolbar-card {
-    background: white;
+.stock-dashboard {
     padding: 20px;
-    border-radius: 16px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
-    display: flex;
-    gap: 20px;
-    margin-bottom: 30px;
-    align-items: center;
-    flex-wrap: wrap;
+    max-width: 1200px;
+    margin: 0 auto;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
-.search-box {
-    flex: 1;
-    min-width: 300px;
-    position: relative;
-}
-
-.search-icon {
-    position: absolute;
-    left: 14px;
-    top: 50%;
-    transform: translateY(-50%);
-    color: #a4b0be;
-    font-size: 1.2rem;
-}
-
-.search-box input {
-    width: 100%;
-    padding: 12px 12px 12px 42px;
-    border: 2px solid #f1f2f6;
-    border-radius: 10px;
-    font-size: 0.95rem;
-    outline: none;
-    background-color: #f8f9fa;
-    box-sizing: border-box;
-    transition: border-color 0.2s;
-}
-
-.search-box input:focus {
-    border-color: #2ed573;
-}
-
-.filter-group {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.filter-group label {
-    font-weight: 600;
-    color: #57606f;
-    font-size: 0.95rem;
-}
-
-.filter-group select {
-    padding: 12px 16px;
-    border: 2px solid #f1f2f6;
-    border-radius: 10px;
-    background: #f8f9fa;
-    font-size: 0.95rem;
-    outline: none;
-    cursor: pointer;
-}
-
-/* === BANNIÈRE ALERTE === */
-.alert-banner {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 16px 20px;
-    border-radius: 12px;
-    font-size: 0.95rem;
-    font-weight: 500;
+.header-section {
     margin-bottom: 25px;
 }
 
+.header-section h1 {
+    margin: 0 0 5px 0;
+    color: #1e293b;
+    font-size: 1.8rem;
+}
+
+.header-section p {
+    margin: 0;
+    color: #64748b;
+}
+
+.alert-banner {
+    padding: 12px 20px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+    font-weight: 500;
+}
+
 .alert-banner.success {
-    background: #f0fdf4;
-    border: 1px solid #bbf7d0;
+    background-color: #dcfce7;
     color: #166534;
+    border: 1px solid #bbf7d0;
 }
 
 .alert-banner.error {
-    background: #fff0f0;
-    border: 1px solid #ffcdd2;
-    color: #d32f2f;
+    background-color: #fee2e2;
+    color: #991b1b;
+    border: 1px solid #fecaca;
 }
 
-.alert-close {
-    margin-left: auto;
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: inherit;
-    opacity: 0.6;
+.toolbar {
+    margin-bottom: 20px;
 }
 
-/* === TABLEAU DESIGN === */
-.table-wrapper {
+.search-input {
+    width: 100%;
+    max-width: 400px;
+    padding: 10px 15px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    outline: none;
+}
+
+.search-input:focus {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.table-container {
     background: white;
-    border-radius: 16px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     overflow: hidden;
+    border: 1px solid #e2e8f0;
 }
 
 .stock-table {
@@ -410,168 +319,107 @@ onMounted(function () {
 }
 
 .stock-table th {
-    background-color: #f8f9fa;
-    color: #57606f;
-    font-weight: 700;
-    padding: 16px 20px;
-    font-size: 0.9rem;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    border-bottom: 2px solid #f1f2f6;
+    background-color: #f8fafc;
+    padding: 12px 15px;
+    font-weight: 600;
+    color: #475569;
+    border-bottom: 1px solid #e2e8f0;
 }
 
 .stock-table td {
-    padding: 16px 20px;
-    border-bottom: 1px solid #f1f2f6;
-    color: #2f3542;
-    font-size: 0.95rem;
+    padding: 12px 15px;
+    border-bottom: 1px solid #e2e8f0;
     vertical-align: middle;
 }
 
-/* Variations de lignes selon l'état critique */
-.stock-table tr.row-empty td {
-    background-color: #fff5f5;
+.stock-table tr:last-child td {
+    border-bottom: none;
 }
 
-.stock-table tr.row-low td {
-    background-color: #fffdf0;
+.stock-table tr:hover {
+    background-color: #f1f5f9;
 }
 
-.font-mono {
-    font-family: monospace;
-    font-size: 1rem;
-    color: #57606f;
+.text-muted {
+    color: #94a3b8;
+    font-style: italic;
 }
 
-.font-bold {
-    font-weight: 700;
-}
-
-.center-text {
-    text-align: center;
-}
-
-.right-text {
-    text-align: right;
-}
-
-/* Inputs Quantité */
-.input-qty {
-    width: 80px;
-    padding: 8px 10px;
-    border: 2px solid #ced6e0;
-    border-radius: 6px;
-    font-size: 1rem;
-    text-align: center;
-    font-weight: bold;
-    outline: none;
-}
-
-.input-qty:focus {
-    border-color: #2ed573;
-}
-
-/* Badges de Type */
-.badge-type {
+.ref-badge {
+    background-color: #f1f5f9;
     padding: 4px 8px;
-    border-radius: 6px;
-    font-size: 0.8rem;
-    font-weight: 700;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 0.85rem;
+    color: #475569;
 }
 
-.badge-type.simple {
-    background-color: #e3f2fd;
-    color: #0d47a1;
+.variant-badge {
+    background-color: #e0e7ff;
+    color: #4338ca;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    text-transform: capitalize;
 }
 
-.badge-type.variant {
-    background-color: #f3e5f5;
-    color: #4a148c;
-}
-
-/* Tags de Statuts quantitatifs */
-.stock-tag {
+.qty-badge {
     display: inline-block;
-    padding: 6px 12px;
+    padding: 4px 12px;
     border-radius: 20px;
-    font-size: 0.8rem;
-    font-weight: 700;
+    font-weight: bold;
+    font-size: 0.9rem;
 }
 
-.status-ok {
-    background-color: #e8f5e9;
-    color: #2e7d32;
+.qty-ok {
+    background-color: #dcfce7;
+    color: #166534;
 }
 
-.status-low {
-    background-color: #fff8e1;
-    color: #f57f17;
+.qty-low {
+    background-color: #fef9c3;
+    color: #854d0e;
 }
 
-.status-empty {
-    background-color: #ffebee;
-    color: #c62828;
+.qty-empty {
+    background-color: #fee2e2;
+    color: #991b1b;
 }
 
-/* Bouton Sauvegarder */
+.qty-input {
+    width: 80px;
+    padding: 6px 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    text-align: center;
+}
+
 .btn-save {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background-color: #2ed573;
+    background-color: #3b82f6;
     color: white;
     border: none;
-    padding: 8px 14px;
+    padding: 8px 16px;
     border-radius: 6px;
-    font-weight: 600;
-    font-size: 0.85rem;
     cursor: pointer;
-    transition: background-color 0.2s;
+    font-weight: 500;
+    transition: background 0.2s;
 }
 
 .btn-save:hover:not(:disabled) {
-    background-color: #26af5f;
+    background-color: #2563eb;
 }
 
 .btn-save:disabled {
-    opacity: 0.6;
+    background-color: #94a3b8;
     cursor: not-allowed;
+    opacity: 0.7;
 }
 
-/* === CHARGEMENT & VIDE === */
-.loading-state,
 .empty-state {
     text-align: center;
-    padding: 60px 20px;
-    background: white;
-    border-radius: 16px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
-}
-
-.spin-loader {
-    font-size: 3rem;
-    color: #2ed573;
-    animation: spin 1s linear infinite;
-    margin-bottom: 15px;
-}
-
-.empty-icon {
-    font-size: 4rem;
-    color: #ced6e0;
-    margin-bottom: 15px;
-}
-
-@keyframes spin {
-    from {
-        transform: rotate(0deg);
-    }
-
-    to {
-        transform: rotate(360deg);
-    }
-}
-
-.spin {
-    animation: spin 1s linear infinite;
+    padding: 40px;
+    color: #64748b;
+    font-style: italic;
 }
 </style>
