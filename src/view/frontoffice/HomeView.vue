@@ -42,10 +42,13 @@ async function loadProducts() {
 
         const productList = await getProducts(params);
         products.value = productList;
+        console.log("product list", productList[0]);
+        console.log("product value", products.value);
 
         // Charger les images et les badges pour les produits trouvés
         for (let i = 0; i < products.value.length; i++) {
             let product = products.value[i];
+            console.log("product ", i, "=", product, " = ", products.value[i]);
 
             // Image
             const defaultImg = product.id_default_image;
@@ -66,9 +69,12 @@ async function loadProducts() {
 
             // Badge HOT/NEW
             let badge = null;
-            if (product.date_add) {
+            console.log("product", product);
+            console.log("product.available_date", product.available_date);
+            if (product.available_date != null) {
+                console.log("misy");
                 let now = new Date();
-                let addedDate = new Date(product.date_add.replace(' ', 'T'));
+                let addedDate = new Date(product.available_date.replace(' ', 'T'));
                 let diffDays = (now - addedDate) / (1000 * 60 * 60 * 24);
                 if (diffDays <= 1) badge = 'HOT';
                 else if (diffDays <= 7) badge = 'NEW';

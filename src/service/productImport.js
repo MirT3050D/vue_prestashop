@@ -1,4 +1,4 @@
-import { getXml, postXml } from '@/service/api';
+import { getXml, postXml, putXml } from '@/service/api';
 import { runResetForTargets } from '@/service/resetService';
 import { resetTargets } from '@/service/resetTargets';
 
@@ -17,14 +17,14 @@ export const processImport = async (data, logCallback) => {
   try {
     for (const [index, row] of data.entries()) {
       logCallback('info', `Importation de la ligne ${index + 1} (${row.nom || 'Sans nom'})...`);
-      
+
       // Calculate Price HT
       const priceRaw = row.prix_ttc ? row.prix_ttc.replace(',', '.') : '0';
       const priceTTC = parseFloat(priceRaw) || 0;
-      
+
       const taxRaw = row.Taxe ? row.Taxe.replace('%', '').replace(',', '.') : '0';
       const taxRate = parseFloat(taxRaw) || 0;
-      
+
       const priceHT = priceTTC / (1 + (taxRate / 100));
 
       // Resolve Tax Rules Group
@@ -49,7 +49,7 @@ export const processImport = async (data, logCallback) => {
               taxCache[taxName] = taxRulesGroupId;
             } else {
               logCallback('info', `Création de la règle de taxe "${taxName}"...`);
-              
+
               // 1. Create Tax
               const taxPayload = { prestashop: { tax: { rate: taxRate, active: 1, name: { language: { '@_id': '1', '#text': taxName } } } } };
               const taxResp = await postXml('/taxes', taxPayload);
@@ -59,27 +59,27 @@ export const processImport = async (data, logCallback) => {
               const groupPayload = { prestashop: { tax_rule_group: { name: taxName, active: 1 } } };
               const groupResp = await postXml('/tax_rule_groups', groupPayload);
               taxRulesGroupId = groupResp.prestashop.tax_rule_group.id;
-              
+
               // 3. Create Tax Rule
               const rulePayload = { prestashop: { tax_rule: { id_tax_rules_group: taxRulesGroupId, id_country: 8, id_tax: taxId, behavior: 0 } } };
               await postXml('/tax_rules', rulePayload);
-              
+
               taxCache[taxName] = taxRulesGroupId;
               logCallback('success', `Règle de taxe "${taxName}" créée avec l'ID ${taxRulesGroupId}.`);
             }
           } catch (taxError) {
-             logCallback('error', `Erreur avec la taxe "${taxName}".`);
-             throw taxError;
+            logCallback('error', `Erreur avec la taxe "${taxName}".`);
+            throw taxError;
           }
         }
       }
-      
+
       // Resolve Category
       let categoryId = 2; // Default to Accueil
       if (row.categorie) {
         const catName = row.categorie.trim();
         const catNameLower = catName.toLowerCase();
-        
+
         if (categoryCache[catNameLower]) {
           categoryId = categoryCache[catNameLower];
         } else {
@@ -87,13 +87,13 @@ export const processImport = async (data, logCallback) => {
           try {
             const searchResp = await getXml(`/categories?filter[name]=[${encodeURIComponent(catName)}]&display=[id,name]`);
             let foundId = null;
-            
+
             if (searchResp && searchResp.prestashop && searchResp.prestashop.categories && searchResp.prestashop.categories.category) {
-               let cats = searchResp.prestashop.categories.category;
-               if (!Array.isArray(cats)) cats = [cats];
-               foundId = cats[0].id;
+              let cats = searchResp.prestashop.categories.category;
+              if (!Array.isArray(cats)) cats = [cats];
+              foundId = cats[0].id;
             }
-            
+
             if (foundId) {
               categoryId = foundId;
               categoryCache[catNameLower] = categoryId;
@@ -121,12 +121,12 @@ export const processImport = async (data, logCallback) => {
               }
             }
           } catch (catError) {
-             logCallback('error', `Erreur avec la catégorie "${catName}".`);
-             throw catError;
+            logCallback('error', `Erreur avec la catégorie "${catName}".`);
+            throw catError;
           }
         }
       }
-      
+
       const productPayload = {
         prestashop: {
           product: {
@@ -159,10 +159,78 @@ export const processImport = async (data, logCallback) => {
         }
       };
 
-      await postXml('/products', productPayload);
+      // 1. Création du produit
+      const newProductResp = await postXml('/products', productPayload);
+      const productId = newProductResp?.prestashop?.product?.id;
+
+      // ========================================================================
+      // DEBUT DU BLOC : MISE A JOUR DE LA DATE DE DISPONIBILITÉ
+      // ========================================================================
+
+      logCallback('info', `Colonnes lues dans le CSV : ${Object.keys(row).join(', ')}`);
+
+      // On cible EXACTEMENT le nom de la colonne de ton fichier CSV
+      const rawDate = row.date_availability_produit;
+
+      if (productId && rawDate) {
+        logCallback('info', `Date brute trouvée dans le CSV pour le produit ${productId} : "${rawDate}"`);
+
+        try {
+          // Formatage strict de JJ/MM/AAAA vers AAAA-MM-JJ
+          let formattedDate = rawDate;
+          if (rawDate.indexOf('/') !== -1) {
+            const parts = rawDate.split('/');
+            const day = parts[0].padStart(2, '0');   // Assure 2 chiffres (ex: 5 -> 05)
+            const month = parts[1].padStart(2, '0'); // Assure 2 chiffres
+            let year = parts[2];
+            if (year.length === 2) year = '20' + year; // Sécurité si l'année est sur 2 chiffres
+
+            formattedDate = `${year}-${month}-${day}`;
+          }
+
+          logCallback('info', `Date formatée pour l'API : "${formattedDate}". Téléchargement du schéma complet...`);
+
+          // On récupère le schéma complet généré par PrestaShop
+          const productToUpdate = await getXml(`/products/${productId}`);
+
+          if (productToUpdate && productToUpdate.prestashop && productToUpdate.prestashop.product) {
+            logCallback('info', `Schéma téléchargé. Remplacement de available_date et nettoyage des nœuds bloquants...`);
+
+            // On modifie la date de disponibilité avec le bon format
+            productToUpdate.prestashop.product.available_date = formattedDate;
+
+            // NETTOYAGE VITAL : On supprime les nœuds en lecture seule qui génèrent du XML invalide
+            delete productToUpdate.prestashop.product.manufacturer_name;
+            delete productToUpdate.prestashop.product.quantity;
+            delete productToUpdate.prestashop.product.id_default_image;
+            delete productToUpdate.prestashop.product.id_default_combination;
+            delete productToUpdate.prestashop.product.position_in_category;
+            delete productToUpdate.prestashop.product.type;
+
+            // Envoi de la mise à jour
+            logCallback('info', `Envoi de la requête PUT pour le produit ${productId}...`);
+            await putXml(`/products/${productId}`, productToUpdate);
+
+            logCallback('success', `Date de disponibilité mise à jour avec succès (${formattedDate}) !`);
+          } else {
+            logCallback('error', `Impossible de lire le schéma du produit ${productId}.`);
+          }
+        } catch (dateError) {
+          logCallback('error', `Échec du PUT pour la date : ${dateError.message}`);
+          if (dateError.response && dateError.response.data) {
+            console.error("Détails de l'erreur XML PrestaShop :", dateError.response.data);
+          }
+        }
+      } else {
+        logCallback('warn', `Aucune date trouvée dans la colonne "date_availability_produit" pour ce produit.`);
+      }
+      // ========================================================================
+      // FIN DU BLOC
+      // ========================================================================
+      logCallback('success', `Ligne ${index + 1} (${row.nom}) importée avec succès.`);
       logCallback('success', `Ligne ${index + 1} (${row.nom}) importée avec succès.`);
     }
-    
+
     logCallback('success', 'Import des produits terminé avec succès !');
   } catch (error) {
     logCallback('error', `Erreur lors de l'import : ${error.message}`);
