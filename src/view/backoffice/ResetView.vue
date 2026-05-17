@@ -2,10 +2,10 @@
 import { computed, ref } from 'vue';
 import { deleteXml, getXml } from '@/service/api';
 import { resetTargets as productResetTargets } from '@/service/resetTargets';
-import { resetDeclinaisonTargets } from '@/service/import';
+// import { resetDeclinaisonTargets } from '@/service/import';
 
 // Dédupliquer les targets par clé pour éviter les doublons
-const allTargets = [...resetDeclinaisonTargets, ...productResetTargets];
+const allTargets = [...productResetTargets];
 const seenKeys = new Set();
 const resetTargets = allTargets.filter(t => {
   if (seenKeys.has(t.key)) return false;
@@ -213,7 +213,8 @@ function toggleAllTargets(event) {
             <h2>Choix precis des entites</h2>
           </div>
           <label class="toggle-all">
-            <input type="checkbox" :checked="selectedTargetKeys.length === resetTargets.length" @change="toggleAllTargets" />
+            <input type="checkbox" :checked="selectedTargetKeys.length === resetTargets.length"
+              @change="toggleAllTargets" />
             <span>Tout selectionner</span>
           </label>
         </div>
@@ -510,6 +511,7 @@ function toggleAllTargets(event) {
 }
 
 @media (max-width: 960px) {
+
   .hero-card,
   .content-grid {
     grid-template-columns: 1fr;

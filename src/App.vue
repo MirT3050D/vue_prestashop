@@ -63,19 +63,23 @@ onBeforeUnmount(() => {
       <nav class="navbar-nav">
         <!-- Menu Backoffice -->
         <template v-if="isBackoffice">
-          <RouterLink to="/backofficeDashboard" class="nav-item" active-class="active">
+          <RouterLink to="/admin/backofficeDashboard" class="nav-item" active-class="active">
             <Icon icon="lucide:layout-dashboard" />
             Tableau de bord
           </RouterLink>
-          <RouterLink to="/orders" class="nav-item" active-class="active">
+          <RouterLink to="/admin/orders" class="nav-item" active-class="active">
             <Icon icon="lucide:shopping-cart" />
             Commandes
           </RouterLink>
-          <RouterLink to="/import" class="nav-item" active-class="active">
+          <RouterLink to="/admin/stocks" class="nav-item" active-class="active">
+            <Icon icon="lucide:package" />
+            Stocks
+          </RouterLink>
+          <RouterLink to="/admin/import" class="nav-item" active-class="active">
             <Icon icon="lucide:import" />
             Import
           </RouterLink>
-          <RouterLink to="/reset" class="nav-item" active-class="active">
+          <RouterLink to="/admin/reset" class="nav-item" active-class="active">
             <Icon icon="lucide:refresh-ccw" />
             Réinitialisation
           </RouterLink>

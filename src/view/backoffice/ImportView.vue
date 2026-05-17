@@ -2,14 +2,15 @@
   <div class="import-page">
     <h1>Import de Données via CSV</h1>
     <p>Sélectionnez un fichier CSV pour importer des données dans PrestaShop.</p>
-    
+
     <div class="import-grid">
       <!-- Card 1: Produits -->
       <div class="upload-card">
         <h2>1. Import de Produits</h2>
         <p>Format: reference, nom, prix_ttc, Taxe, categorie</p>
         <div class="upload-section">
-          <input type="file" accept=".csv" @change="(e) => onFileChange(e, 'product')" :disabled="isImportingAll" class="file-input" />
+          <input type="file" accept=".csv" @change="(e) => onFileChange(e, 'product')" :disabled="isImportingAll"
+            class="file-input" />
         </div>
       </div>
 
@@ -18,16 +19,19 @@
         <h2>2. Import de Variations</h2>
         <p>Format: reference, specificité, karazany, stock_initial, prix_vente_ttc, Taxe</p>
         <div class="upload-section">
-          <input type="file" accept=".csv" @change="(e) => onFileChange(e, 'variant')" :disabled="isImportingAll" class="file-input" />
+          <input type="file" accept=".csv" @change="(e) => onFileChange(e, 'variant')" :disabled="isImportingAll"
+            class="file-input" />
         </div>
       </div>
 
       <!-- Card 3: Orders -->
       <div class="upload-card">
         <h2>3. Import de Commandes</h2>
-        <p>Format: customer_email, customer_firstname, customer_lastname, product_reference, product_quantity, order_date</p>
+        <p>Format: customer_email, customer_firstname, customer_lastname, product_reference, product_quantity,
+          order_date</p>
         <div class="upload-section">
-          <input type="file" accept=".csv" @change="(e) => onFileChange(e, 'order')" :disabled="isImportingAll" class="file-input" />
+          <input type="file" accept=".csv" @change="(e) => onFileChange(e, 'order')" :disabled="isImportingAll"
+            class="file-input" />
         </div>
       </div>
 
@@ -36,14 +40,16 @@
         <h2>4. Import d'Images</h2>
         <p>Format: .zip contenant les images (ex: REF123.jpg, REF123_1.png)</p>
         <div class="upload-section">
-          <input type="file" accept=".zip" @change="(e) => onFileChange(e, 'image')" :disabled="isImportingAll" class="file-input" />
+          <input type="file" accept=".zip" @change="(e) => onFileChange(e, 'image')" :disabled="isImportingAll"
+            class="file-input" />
         </div>
       </div>
     </div>
 
     <div class="controls" style="margin-top:20px;">
       <button class="action-btn" @click="startAllImports" :disabled="isImportingAll">
-        {{ isImportingAll ? 'Import global en cours...' : 'Lancer l\'import (produit → déclinaison → commande → image)' }}
+        {{ isImportingAll ? 'Import global en cours...' : 'Lancer l\'import (produit → déclinaison → commande → image)'
+        }}
       </button>
     </div>
 
@@ -61,8 +67,7 @@
 <script setup>
 import { ref } from 'vue';
 import Papa from 'papaparse';
-import { processImport, processVariantImport } from '@/service/import';
-import { processOrderImport } from '@/service/orderImport';
+import { processProductImport, processVariantImport, processOrderImport } from '@/service/import';
 import { processImageImport } from '@/service/imageImport';
 
 const fileProduct = ref(null);
@@ -113,7 +118,7 @@ const startAllImports = async () => {
       addLog('info', 'Lecture CSV Produits...');
       const data = await parseCsvFile(fileProduct.value);
       addLog('success', `${data.length} lignes trouvées dans le CSV Produits. Début de l'import.`);
-      await processImport(data, addLog);
+      await processProductImport(data, addLog);
     } else {
       addLog('info', 'Pas de fichier Produits fourni — ignoré.');
     }
@@ -180,7 +185,7 @@ const startAllImports = async () => {
   background: white;
   padding: 24px;
   border-radius: 12px;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
   display: flex;
   flex-direction: column;
   border: 1px solid #e2e8f0;
@@ -189,7 +194,7 @@ const startAllImports = async () => {
 
 .upload-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 15px rgba(0,0,0,0.08);
+  box-shadow: 0 8px 15px rgba(0, 0, 0, 0.08);
 }
 
 .upload-card h2 {
@@ -274,12 +279,24 @@ const startAllImports = async () => {
   margin-bottom: 8px;
   padding: 8px 12px;
   border-radius: 6px;
-  background: rgba(255,255,255,0.05);
+  background: rgba(255, 255, 255, 0.05);
   font-size: 0.9rem;
 }
 
-.info { color: #60a5fa; border-left: 3px solid #60a5fa; }
-.success { color: #4ade80; border-left: 3px solid #4ade80; }
-.error { color: #f87171; font-weight: bold; background-color: rgba(248, 113, 113, 0.1); border-left: 3px solid #f87171; }
-</style>
+.info {
+  color: #60a5fa;
+  border-left: 3px solid #60a5fa;
+}
 
+.success {
+  color: #4ade80;
+  border-left: 3px solid #4ade80;
+}
+
+.error {
+  color: #f87171;
+  font-weight: bold;
+  background-color: rgba(248, 113, 113, 0.1);
+  border-left: 3px solid #f87171;
+}
+</style>

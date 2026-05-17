@@ -10,116 +10,162 @@ export const rollbackProducts = async (logCallback) => {
   logCallback('info', 'Réinitialisation terminée. L\'import a été annulé.');
 };
 
-export const processImport = async (data, logCallback) => {
+export const processProductImport = async (data, logCallback) => {
   const categoryCache = {};
   const taxCache = {};
 
+  // ========================================================================
+  // SÉCURITÉ 1 : VÉRIFICATION GLOBALE DES COLONNES DU CSV
+  // ========================================================================
+  if (data.length > 0) {
+    const expectedColumns = ['date_produit', 'nom', 'reference', 'prix_ttc', 'Taxe', 'categorie'];
+    const actualColumns = Object.keys(data[0]);
+    const missingColumns = expectedColumns.filter(col => !actualColumns.includes(col));
+
+    if (missingColumns.length > 0) {
+      logCallback('error', `CRITIQUE : Colonnes manquantes dans le CSV : ${missingColumns.join(', ')}`);
+      logCallback('error', 'Annulation totale de l\'import pour protéger la base de données.');
+      return; // Stoppe net le programme si le fichier n'a pas les bonnes colonnes
+    }
+  }
+
   try {
     for (const [index, row] of data.entries()) {
-      logCallback('info', `Importation de la ligne ${index + 1} (${row.nom || 'Sans nom'})...`);
+      logCallback('info', `Analyse de la ligne ${index + 1} (${row.nom || 'Inconnu'})...`);
 
-      // Calculate Price HT
-      const priceRaw = row.prix_ttc ? row.prix_ttc.replace(',', '.') : '0';
-      const priceTTC = parseFloat(priceRaw) || 0;
+      // ========================================================================
+      // SÉCURITÉ 2 : DONNÉES OBLIGATOIRES (Nom et Référence)
+      // ========================================================================
+      if (!row.nom || String(row.nom).trim() === '' || !row.reference || String(row.reference).trim() === '') {
+        logCallback('error', `Ligne ${index + 1} ignorée : Le "nom" ou la "reference" est manquant.`);
+        continue; // Saute cette ligne et passe à la suivante
+      }
 
-      const taxRaw = row.Taxe ? row.Taxe.replace('%', '').replace(',', '.') : '0';
-      const taxRate = parseFloat(taxRaw) || 0;
+      // ========================================================================
+      // SÉCURITÉ 3 : MONTANTS POSITIFS ET VALIDES (Prix et Taxe)
+      // ========================================================================
+      const priceRaw = row.prix_ttc ? String(row.prix_ttc).replace(',', '.') : '0';
+      const priceTTC = parseFloat(priceRaw);
+
+      if (isNaN(priceTTC) || priceTTC <= 0) {
+        logCallback('error', `Ligne ${index + 1} ignorée : Le prix TTC ("${row.prix_ttc}") est invalide, zéro ou négatif.`);
+        continue;
+      }
+
+      const taxRaw = row.Taxe ? String(row.Taxe).replace('%', '').replace(',', '.') : '0';
+      const taxRate = parseFloat(taxRaw);
+
+      if (isNaN(taxRate) || taxRate < 0) {
+        logCallback('error', `Ligne ${index + 1} ignorée : La Taxe ("${row.Taxe}") est invalide ou négative.`);
+        continue;
+      }
 
       const priceHT = priceTTC / (1 + (taxRate / 100));
 
-      // Resolve Tax Rules Group
-      let taxRulesGroupId = 0; // Default to no tax
+      // ========================================================================
+      // SÉCURITÉ 4 : DATE (Format strict DD/MM/YYYY)
+      // ========================================================================
+      const rawDate = row.date_produit; // On utilise la bonne colonne
+      let formattedDate = null;
+
+      if (rawDate && rawDate.trim() !== '') {
+        // Regex : 2 chiffres, un slash, 2 chiffres, un slash, 4 chiffres
+        const dateRegex = /^\d{2}\/\d{2}\/\d{4}$/;
+
+        if (!dateRegex.test(rawDate.trim())) {
+          logCallback('error', `Ligne ${index + 1} ignorée : La date ("${rawDate}") ne respecte pas le format strict DD/MM/YYYY.`);
+          continue;
+        }
+
+        // Puisqu'on est sûr à 100% du format grâce au Regex, on formate pour PrestaShop (AAAA-MM-JJ)
+        const parts = rawDate.trim().split('/');
+        formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+      } else {
+        logCallback('warn', `Ligne ${index + 1} : Aucune date renseignée. La date sera vide par défaut.`);
+      }
+
+      // ========================================================================
+      // RÉSOLUTION DES TAXES
+      // ========================================================================
+      let taxRulesGroupId = '0'; // Par défaut, 0 = aucune taxe
       if (taxRate > 0) {
-        const taxName = `TVA ${taxRate}`;
-        if (taxCache[taxName]) {
-          taxRulesGroupId = taxCache[taxName];
+        if (taxCache[taxRate]) {
+          taxRulesGroupId = taxCache[taxRate];
         } else {
-          logCallback('info', `Recherche de la règle de taxe "${taxName}"...`);
-          try {
-            const searchResp = await getXml(`/tax_rule_groups?filter[name]=[${encodeURIComponent(taxName)}]&display=[id,name]`);
-            let foundId = null;
-            if (searchResp && searchResp.prestashop && searchResp.prestashop.tax_rule_groups && searchResp.prestashop.tax_rule_groups.tax_rule_group) {
-              let groups = searchResp.prestashop.tax_rule_groups.tax_rule_group;
-              if (!Array.isArray(groups)) groups = [groups];
-              foundId = groups[0].id;
+          const taxRulesResp = await getXml('/tax_rule_groups?display=full');
+          const groups = taxRulesResp?.prestashop?.tax_rule_groups?.tax_rule_group;
+          if (groups) {
+            const groupList = Array.isArray(groups) ? groups : [groups];
+            for (const group of groupList) {
+              const rulesResp = await getXml(`/tax_rules?filter[id_tax_rules_group]=[${group.id}]&display=full`);
+              const rules = rulesResp?.prestashop?.tax_rules?.tax_rule;
+              if (rules) {
+                const ruleList = Array.isArray(rules) ? rules : [rules];
+                for (const rule of ruleList) {
+                  const taxResp = await getXml(`/taxes/${rule.id_tax}?display=full`);
+                  const taxInfo = taxResp?.prestashop?.tax;
+                  if (taxInfo && parseFloat(taxInfo.rate) === taxRate) {
+                    taxRulesGroupId = group.id;
+                    break;
+                  }
+                }
+              }
+              if (taxRulesGroupId !== '0') break;
             }
-
-            if (foundId) {
-              taxRulesGroupId = foundId;
-              taxCache[taxName] = taxRulesGroupId;
-            } else {
-              logCallback('info', `Création de la règle de taxe "${taxName}"...`);
-
-              // 1. Create Tax
-              const taxPayload = { prestashop: { tax: { rate: taxRate, active: 1, name: { language: { '@_id': '1', '#text': taxName } } } } };
-              const taxResp = await postXml('/taxes', taxPayload);
-              const taxId = taxResp.prestashop.tax.id;
-
-              // 2. Create Tax Rules Group
-              const groupPayload = { prestashop: { tax_rule_group: { name: taxName, active: 1 } } };
-              const groupResp = await postXml('/tax_rule_groups', groupPayload);
-              taxRulesGroupId = groupResp.prestashop.tax_rule_group.id;
-
-              // 3. Create Tax Rule
-              const rulePayload = { prestashop: { tax_rule: { id_tax_rules_group: taxRulesGroupId, id_country: 8, id_tax: taxId, behavior: 0 } } };
-              await postXml('/tax_rules', rulePayload);
-
-              taxCache[taxName] = taxRulesGroupId;
-              logCallback('success', `Règle de taxe "${taxName}" créée avec l'ID ${taxRulesGroupId}.`);
-            }
-          } catch (taxError) {
-            logCallback('error', `Erreur avec la taxe "${taxName}".`);
-            throw taxError;
           }
+          taxCache[taxRate] = taxRulesGroupId;
         }
       }
 
-      // Resolve Category
-      let categoryId = 2; // Default to Accueil
+      // ========================================================================
+      // RÉSOLUTION / CRÉATION DES CATÉGORIES
+      // ========================================================================
+      let categoryId = '2'; // Catégorie "Accueil" par défaut
       if (row.categorie) {
         const catName = row.categorie.trim();
-        const catNameLower = catName.toLowerCase();
-
-        if (categoryCache[catNameLower]) {
-          categoryId = categoryCache[catNameLower];
+        if (categoryCache[catName]) {
+          categoryId = categoryCache[catName];
         } else {
-          logCallback('info', `Recherche de la catégorie "${catName}"...`);
           try {
-            const searchResp = await getXml(`/categories?filter[name]=[${encodeURIComponent(catName)}]&display=[id,name]`);
-            let foundId = null;
+            // Chercher si la catégorie existe
+            const catResp = await getXml(`/categories?filter[name]=[${catName}]&display=full`);
+            const categories = catResp?.prestashop?.categories?.category;
 
-            if (searchResp && searchResp.prestashop && searchResp.prestashop.categories && searchResp.prestashop.categories.category) {
-              let cats = searchResp.prestashop.categories.category;
-              if (!Array.isArray(cats)) cats = [cats];
-              foundId = cats[0].id;
-            }
-
-            if (foundId) {
-              categoryId = foundId;
-              categoryCache[catNameLower] = categoryId;
+            if (categories) {
+              categoryId = Array.isArray(categories) ? categories[0].id : categories.id;
             } else {
-              logCallback('info', `Création de la catégorie "${catName}"...`);
-              const catPayload = {
+              // Créer la catégorie si introuvable
+              logCallback('info', `Création de la nouvelle catégorie "${catName}"...`);
+              const newCatPayload = {
                 prestashop: {
                   category: {
-                    active: 1,
                     id_parent: 2,
+                    active: 1,
                     name: {
-                      language: { '@_id': '1', '#text': catName }
+                      language: {
+                        '@_id': '1',
+                        '#text': catName
+                      }
                     },
                     link_rewrite: {
-                      language: { '@_id': '1', '#text': catName.toLowerCase().replace(/[^a-z0-9]+/g, '-') }
+                      language: {
+                        '@_id': '1',
+                        '#text': catName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+                      }
                     }
                   }
                 }
               };
-              const createResp = await postXml('/categories', catPayload);
-              if (createResp && createResp.prestashop && createResp.prestashop.category) {
-                categoryId = createResp.prestashop.category.id;
-                categoryCache[catNameLower] = categoryId;
+
+              const createdCatResp = await postXml('/categories', newCatPayload);
+              if (createdCatResp?.prestashop?.category?.id) {
+                categoryId = createdCatResp.prestashop.category.id;
                 logCallback('success', `Catégorie "${catName}" créée avec l'ID ${categoryId}.`);
+              } else {
+                throw new Error("Échec de la création de la catégorie.");
               }
             }
+            categoryCache[catName] = categoryId;
           } catch (catError) {
             logCallback('error', `Erreur avec la catégorie "${catName}".`);
             throw catError;
@@ -127,25 +173,28 @@ export const processImport = async (data, logCallback) => {
         }
       }
 
+      // ========================================================================
+      // CRÉATION DU PRODUIT
+      // ========================================================================
       const productPayload = {
         prestashop: {
           product: {
             state: 1,
             active: 1,
-            reference: row.reference || '',
+            reference: row.reference,
             price: priceHT.toFixed(6),
             id_tax_rules_group: taxRulesGroupId,
             id_category_default: categoryId,
             name: {
               language: {
                 '@_id': '1',
-                '#text': row.nom || 'Produit sans nom'
+                '#text': row.nom
               }
             },
             link_rewrite: {
               language: {
                 '@_id': '1',
-                '#text': (row.nom || 'produit').toLowerCase().replace(/[^a-z0-9]+/g, '-')
+                '#text': row.nom.toLowerCase().replace(/[^a-z0-9]+/g, '-')
               }
             },
             associations: {
@@ -159,47 +208,21 @@ export const processImport = async (data, logCallback) => {
         }
       };
 
-      // 1. Création du produit
       const newProductResp = await postXml('/products', productPayload);
       const productId = newProductResp?.prestashop?.product?.id;
 
       // ========================================================================
-      // DEBUT DU BLOC : MISE A JOUR DE LA DATE DE DISPONIBILITÉ
+      // FORÇAGE DE LA DATE DE DISPONIBILITÉ (Avec nettoyage XML)
       // ========================================================================
-
-      logCallback('info', `Colonnes lues dans le CSV : ${Object.keys(row).join(', ')}`);
-
-      // On cible EXACTEMENT le nom de la colonne de ton fichier CSV
-      const rawDate = row.date_availability_produit;
-
-      if (productId && rawDate) {
-        logCallback('info', `Date brute trouvée dans le CSV pour le produit ${productId} : "${rawDate}"`);
-
+      if (productId && formattedDate) {
+        logCallback('info', `Mise à jour de la date de disponibilité vers ${formattedDate}...`);
         try {
-          // Formatage strict de JJ/MM/AAAA vers AAAA-MM-JJ
-          let formattedDate = rawDate;
-          if (rawDate.indexOf('/') !== -1) {
-            const parts = rawDate.split('/');
-            const day = parts[0].padStart(2, '0');   // Assure 2 chiffres (ex: 5 -> 05)
-            const month = parts[1].padStart(2, '0'); // Assure 2 chiffres
-            let year = parts[2];
-            if (year.length === 2) year = '20' + year; // Sécurité si l'année est sur 2 chiffres
-
-            formattedDate = `${year}-${month}-${day}`;
-          }
-
-          logCallback('info', `Date formatée pour l'API : "${formattedDate}". Téléchargement du schéma complet...`);
-
-          // On récupère le schéma complet généré par PrestaShop
           const productToUpdate = await getXml(`/products/${productId}`);
 
           if (productToUpdate && productToUpdate.prestashop && productToUpdate.prestashop.product) {
-            logCallback('info', `Schéma téléchargé. Remplacement de available_date et nettoyage des nœuds bloquants...`);
-
-            // On modifie la date de disponibilité avec le bon format
             productToUpdate.prestashop.product.available_date = formattedDate;
 
-            // NETTOYAGE VITAL : On supprime les nœuds en lecture seule qui génèrent du XML invalide
+            // NETTOYAGE VITAL : Suppression des nœuds non modifiables générant l'erreur XML 127
             delete productToUpdate.prestashop.product.manufacturer_name;
             delete productToUpdate.prestashop.product.quantity;
             delete productToUpdate.prestashop.product.id_default_image;
@@ -207,27 +230,14 @@ export const processImport = async (data, logCallback) => {
             delete productToUpdate.prestashop.product.position_in_category;
             delete productToUpdate.prestashop.product.type;
 
-            // Envoi de la mise à jour
-            logCallback('info', `Envoi de la requête PUT pour le produit ${productId}...`);
             await putXml(`/products/${productId}`, productToUpdate);
-
-            logCallback('success', `Date de disponibilité mise à jour avec succès (${formattedDate}) !`);
-          } else {
-            logCallback('error', `Impossible de lire le schéma du produit ${productId}.`);
+            logCallback('success', `Date de disponibilité mise à jour avec succès !`);
           }
         } catch (dateError) {
           logCallback('error', `Échec du PUT pour la date : ${dateError.message}`);
-          if (dateError.response && dateError.response.data) {
-            console.error("Détails de l'erreur XML PrestaShop :", dateError.response.data);
-          }
         }
-      } else {
-        logCallback('warn', `Aucune date trouvée dans la colonne "date_availability_produit" pour ce produit.`);
       }
-      // ========================================================================
-      // FIN DU BLOC
-      // ========================================================================
-      logCallback('success', `Ligne ${index + 1} (${row.nom}) importée avec succès.`);
+
       logCallback('success', `Ligne ${index + 1} (${row.nom}) importée avec succès.`);
     }
 
