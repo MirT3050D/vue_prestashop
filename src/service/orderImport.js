@@ -83,13 +83,24 @@ function extractId(node) {
 export const processOrderImport = async (data, logCallback) => {
 
     // ========================================================================
-    // SÉCURITÉ 1 : VÉRIFICATION GLOBALE DES COLONNES CONFORMES
+    // NETTOYAGE : FORCER TOUTES LES COLONNES EN MINUSCULES (Ignorer la casse)
     // ========================================================================
-    if (!data || data.length === 0) {
+    if (data && data.length > 0) {
+        data = data.map(row => {
+            const newRow = {};
+            for (const key in row) {
+                newRow[key.trim().toLowerCase()] = row[key];
+            }
+            return newRow;
+        });
+    } else {
         logCallback('warn', 'Le fichier CSV des commandes est vide.');
         return;
     }
 
+    // ========================================================================
+    // SÉCURITÉ 1 : VÉRIFICATION GLOBALE DES COLONNES CONFORMES
+    // ========================================================================
     const expectedColumns = ['date', 'nom', 'email', 'pwd', 'adresse', 'achat', 'etat'];
     const actualColumns = Object.keys(data[0]);
     const missingColumns = expectedColumns.filter(col => !actualColumns.includes(col));
@@ -256,7 +267,7 @@ export const processOrderImport = async (data, logCallback) => {
             if (productCheckFailed) continue;
 
             // ========================================================================
-            // CRÉATION DU PANIER 
+            // CRÉATION DU PANIER (Correction apportée sur la balise id_customer)
             // ========================================================================
             const cartXmlPayload = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
@@ -286,7 +297,7 @@ ${cartRowsXml}
             }
 
             // ========================================================================
-            // LA RÈGLE D'OR (PANIERS ABANDONNÉS)
+            // LA RÈGLE D'OR (PANIERS ABANDONNÉS HISTORIQUES)
             // ========================================================================
             const etatBrut = row.etat ? String(row.etat).trim().toLowerCase() : '';
 
@@ -323,7 +334,7 @@ ${cartRowsXml}
             // ========================================================================
             // CRÉATION DE LA COMMANDE
             // ========================================================================
-            let orderStateId = '2'; // Paiement accepté par défaut
+            let orderStateId = '2';
 
             for (let s = 0; s < stateList.length; s++) {
                 const stateNode = stateList[s].name?.language;
@@ -388,7 +399,6 @@ ${cartRowsXml}
 </prestashop>`;
                 await putXml(`/orders/${orderId}`, updateOrderDatePayload);
 
-                // Nettoyage visuel du panier
                 const cleanCartPayload = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
     <cart>

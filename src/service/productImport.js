@@ -15,19 +15,33 @@ export const processProductImport = async (data, logCallback) => {
   const taxCache = {};
 
   // ========================================================================
+  // NETTOYAGE : FORCER TOUTES LES COLONNES EN MINUSCULES (Ignorer la casse)
+  // ========================================================================
+  if (data && data.length > 0) {
+    data = data.map(row => {
+      const newRow = {};
+      for (const key in row) {
+        newRow[key.trim().toLowerCase()] = row[key];
+      }
+      return newRow;
+    });
+  } else {
+    logCallback('warn', 'Le fichier CSV des produits est vide.');
+    return;
+  }
+
+  // ========================================================================
   // SÉCURITÉ 1 : VÉRIFICATION GLOBALE DES COLONNES DU CSV
   // ========================================================================
-  if (data.length > 0) {
-    // CORRECTION : Ajout de 'prix_achat' dans les colonnes obligatoires
-    const expectedColumns = ['date_availability_produit', 'nom', 'reference', 'prix_ttc', 'Taxe', 'categorie', 'prix_achat'];
-    const actualColumns = Object.keys(data[0]);
-    const missingColumns = expectedColumns.filter(col => !actualColumns.includes(col));
+  // Note : "taxe" est maintenant en minuscules car on a converti les entêtes juste au-dessus
+  const expectedColumns = ['date_availability_produit', 'nom', 'reference', 'prix_ttc', 'taxe', 'categorie', 'prix_achat'];
+  const actualColumns = Object.keys(data[0]);
+  const missingColumns = expectedColumns.filter(col => !actualColumns.includes(col));
 
-    if (missingColumns.length > 0) {
-      logCallback('error', `CRITIQUE : Colonnes manquantes dans le CSV : ${missingColumns.join(', ')}`);
-      logCallback('error', 'Annulation totale de l\'import pour protéger la base de données.');
-      return;
-    }
+  if (missingColumns.length > 0) {
+    logCallback('error', `CRITIQUE : Colonnes manquantes dans le CSV : ${missingColumns.join(', ')}`);
+    logCallback('error', 'Annulation totale de l\'import pour protéger la base de données.');
+    return;
   }
 
   try {
@@ -53,17 +67,17 @@ export const processProductImport = async (data, logCallback) => {
         continue;
       }
 
-      const taxRaw = row.Taxe ? String(row.Taxe).replace('%', '').replace(',', '.') : '0';
+      const taxRaw = row.taxe ? String(row.taxe).replace('%', '').replace(',', '.') : '0';
       const taxRate = parseFloat(taxRaw);
 
       if (isNaN(taxRate) || taxRate < 0) {
-        logCallback('error', `Ligne ${index + 1} ignorée : La Taxe ("${row.Taxe}") est invalide ou négative.`);
+        logCallback('error', `Ligne ${index + 1} ignorée : La Taxe ("${row.taxe}") est invalide ou négative.`);
         continue;
       }
 
       const priceHT = priceTTC / (1 + (taxRate / 100));
 
-      // NOUVEAU : Traitement du prix d'achat
+      // Traitement du prix d'achat
       const prixAchatRaw = row.prix_achat ? String(row.prix_achat).replace(',', '.') : '0';
       const wholesalePrice = parseFloat(prixAchatRaw);
       const finalWholesalePrice = isNaN(wholesalePrice) || wholesalePrice < 0 ? 0 : wholesalePrice;
@@ -71,7 +85,6 @@ export const processProductImport = async (data, logCallback) => {
       // ========================================================================
       // SÉCURITÉ 4 : DATE (Format strict DD/MM/YYYY)
       // ========================================================================
-      // CORRECTION : On cible le nom de colonne exact du CSV
       const rawDate = row.date_availability_produit;
       let formattedDate = null;
 
@@ -186,7 +199,7 @@ export const processProductImport = async (data, logCallback) => {
             active: 1,
             reference: row.reference,
             price: priceHT.toFixed(6),
-            wholesale_price: finalWholesalePrice.toFixed(6), // NOUVEAU : Envoi du prix d'achat
+            wholesale_price: finalWholesalePrice.toFixed(6),
             id_tax_rules_group: taxRulesGroupId,
             id_category_default: categoryId,
             name: {
@@ -226,6 +239,7 @@ export const processProductImport = async (data, logCallback) => {
           if (productToUpdate && productToUpdate.prestashop && productToUpdate.prestashop.product) {
             productToUpdate.prestashop.product.available_date = formattedDate;
 
+            // NETTOYAGE VITAL : Empêche le crash (Erreur XML 127) de l'API lors du PUT
             delete productToUpdate.prestashop.product.manufacturer_name;
             delete productToUpdate.prestashop.product.quantity;
             delete productToUpdate.prestashop.product.id_default_image;

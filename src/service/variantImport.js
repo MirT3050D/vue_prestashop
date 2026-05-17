@@ -45,12 +45,20 @@ export const rollbackDeclinaison = async (logCallback) => {
 export const processVariantImport = async (data, logCallback) => {
   const optionCache = {};
   const optionValueCache = {};
-  const employeeId = 1; // Ton ID SuperAdmin pour signer les mvts
+  const employeeId = 1;
 
   // ========================================================================
-  // SÉCURITÉ 1 : VÉRIFICATION GLOBALE DES COLONNES DU CSV
+  // NETTOYAGE : FORCER TOUTES LES COLONNES EN MINUSCULES (Ignorer la casse)
   // ========================================================================
-  if (!data || data.length === 0) {
+  if (data && data.length > 0) {
+    data = data.map(row => {
+      const newRow = {};
+      for (const key in row) {
+        newRow[key.trim().toLowerCase()] = row[key];
+      }
+      return newRow;
+    });
+  } else {
     logCallback('warn', 'Le fichier CSV des variations est vide.');
     return;
   }
@@ -68,9 +76,6 @@ export const processVariantImport = async (data, logCallback) => {
   try {
     for (const [index, row] of data.entries()) {
 
-      // ========================================================================
-      // SÉCURITÉ 2 : DONNÉES OBLIGATOIRES (La référence)
-      // ========================================================================
       if (!row.reference || String(row.reference).trim() === '') {
         logCallback('error', `Ligne ${index + 1} ignorée : Référence du produit manquante.`);
         continue;
@@ -82,9 +87,6 @@ export const processVariantImport = async (data, logCallback) => {
 
       logCallback('info', `Traitement de la ligne ${index + 1} (Réf: ${reference})...`);
 
-      // ========================================================================
-      // SÉCURITÉ 3 : MONTANTS POSITIFS ET VALIDES (Stock et Prix)
-      // ========================================================================
       const stockRaw = row.stock_initial ? String(row.stock_initial).trim() : '';
       let stockInitial = 0;
 
@@ -178,8 +180,6 @@ export const processVariantImport = async (data, logCallback) => {
       // ========================================================================
       // CAS 2 : PRODUIT AVEC DÉCLINAISONS (Création Déclinaison + Stock + Mouvement)
       // ========================================================================
-
-      // Calcul de l'impact sur le prix
       let priceImpact = 0;
       if (prixVenteTTC > 0) {
         const parentPriceHT = parseFloat(parentProduct.price) || 0;
@@ -316,4 +316,4 @@ export const processVariantImport = async (data, logCallback) => {
     logCallback('error', 'Annulation de l\'opération et lancement de la réinitialisation (Rollback)...');
     await rollbackDeclinaison(logCallback);
   }
-}
+};
