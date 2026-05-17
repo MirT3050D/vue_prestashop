@@ -1,11 +1,12 @@
 <script setup>
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, watch, computed } from 'vue';
 import { getImage } from '@/service/api';
 import { getProduct, getCombinations, getProductOptionValues, getProductOptions } from '@/service/productService';
 import { getProductTaxRate } from '@/service/price';
 import Loading from '@/components/Loading.vue';
 import { useRoute } from 'vue-router';
 import { Icon } from '@iconify/vue';
+import { getStockAvailables } from '@/service/stockService';
 
 const route = useRoute();
 const loading = ref(false);
@@ -16,6 +17,7 @@ const selectedOptions = ref({});
 const productCombinations = ref([]);
 const quantity = ref(1);
 const productTaxRate = ref(0);
+const stock = ref(0);
 
 function getLangText(field) {
     if (!field || !field.language) return '';
@@ -23,422 +25,282 @@ function getLangText(field) {
     return field.language['#text'];
 }
 
-async function updateImage() {
-    if (productCombinations.value.length === 0) return;
+function safeId(node) {
+    if (!node) return '';
+    if (typeof node === 'object') {
+        return String(node['#text'] || node['@_id'] || node.id || '');
+    }
+    return String(node);
+}
 
-    // Obtenir la liste des valeurs d'options actuellement sélectionnées
-    let currentSelectedValues = [];
-    let keys = Object.keys(selectedOptions.value);
-    for (let i = 0; i < keys.length; i++) {
-        currentSelectedValues.push(String(selectedOptions.value[keys[i]]));
+async function updateCurrentStock() {
+    if (!product.value) return;
+
+    const cleanProductId = safeId(product.value.id);
+    let idProductAttribute = '0';
+
+    if (productCombinations.value.length > 0) {
+        const currentSelectedValues = [];
+        for (const key of Object.keys(selectedOptions.value)) {
+            if (selectedOptions.value[key]) {
+                currentSelectedValues.push(String(selectedOptions.value[key]));
+            }
+        }
+
+        const matchingCombination = productCombinations.value.find(comb => {
+            const combValues = comb.associations?.product_option_values?.product_option_value;
+            if (!combValues) return false;
+            const combValueIds = Array.isArray(combValues)
+                ? combValues.map(v => safeId(v.id))
+                : [safeId(combValues.id)];
+
+            return currentSelectedValues.length === combValueIds.length &&
+                currentSelectedValues.every(id => combValueIds.includes(id));
+        });
+
+        if (matchingCombination) {
+            idProductAttribute = safeId(matchingCombination.id);
+        }
     }
 
-    // Trouver la combinaison correspondante
-    let matchedCombination = null;
+    try {
+        const stockData = await getStockAvailables(`filter[id_product]=[${cleanProductId}]&filter[id_product_attribute]=[${idProductAttribute}]&display=[quantity]`);
+        if (stockData && stockData.length > 0) {
+            stock.value = parseInt(stockData[0].quantity, 10) || 0;
+        } else {
+            stock.value = 0;
+        }
+    } catch (error) {
+        console.error("Erreur lors de la récupération du stock :", error);
+        stock.value = 0;
+    }
+}
 
-    for (let i = 0; i < productCombinations.value.length; i++) {
-        let comb = productCombinations.value[i];
-        if (comb.associations && comb.associations.product_option_values) {
-            let optValuesContainer = comb.associations.product_option_values;
-            let optValues = optValuesContainer.product_option_value || optValuesContainer;
-            if (!Array.isArray(optValues)) optValues = [optValues];
+// ============================================================================
+// CORRECTION : RECHERCHE DE L'IMAGE STRICTE
+// ============================================================================
+async function updateImage() {
+    if (!product.value) return;
 
-            // On extrait les IDs des options de cette combinaison
-            let combValues = [];
-            for (let j = 0; j < optValues.length; j++) {
-                if (optValues[j] && optValues[j].id) {
-                    combValues.push(String(optValues[j].id));
-                }
+    const cleanProductId = safeId(product.value.id);
+    const defaultImageId = safeId(product.value.id_default_image);
+    let imageIdToFetch = defaultImageId; // Image par défaut du produit
+
+    if (productCombinations.value.length > 0) {
+        const currentSelectedValues = [];
+        for (const key of Object.keys(selectedOptions.value)) {
+            if (selectedOptions.value[key]) {
+                currentSelectedValues.push(String(selectedOptions.value[key]));
             }
+        }
 
-            // Vérifier si toutes les valeurs sélectionnées sont dans cette combinaison
-            let isMatch = true;
-            for (let k = 0; k < currentSelectedValues.length; k++) {
-                let matchFound = false;
-                for (let l = 0; l < combValues.length; l++) {
-                    if (combValues[l] == currentSelectedValues[k]) {
-                        matchFound = true;
-                        break;
-                    }
-                }
-                if (!matchFound) {
-                    isMatch = false;
+        let matchingComb = null;
+        for (let i = 0; i < productCombinations.value.length; i++) {
+            const comb = productCombinations.value[i];
+            const combValues = comb.associations?.product_option_values?.product_option_value;
+            if (!combValues) continue;
+
+            const combValueIds = Array.isArray(combValues) ? combValues.map(v => safeId(v.id)) : [safeId(combValues.id)];
+
+            let match = true;
+            for (let j = 0; j < currentSelectedValues.length; j++) {
+                if (!combValueIds.includes(currentSelectedValues[j])) {
+                    match = false;
                     break;
                 }
             }
-
-            if (isMatch) {
-                matchedCombination = comb;
+            if (match) {
+                matchingComb = comb;
                 break;
             }
         }
+
+        // Si la déclinaison a une image spécifique, on écrase l'image par défaut
+        if (matchingComb && matchingComb.associations && matchingComb.associations.images && matchingComb.associations.images.image) {
+            const imgData = matchingComb.associations.images.image;
+            const specificImageId = safeId(Array.isArray(imgData) ? imgData[0].id : imgData.id || imgData);
+            if (specificImageId) {
+                imageIdToFetch = specificImageId;
+            }
+        }
     }
 
-    // Si on a trouvé la bonne combinaison, on récupère son image
-    if (matchedCombination && matchedCombination.associations && matchedCombination.associations.images) {
-        let imagesContainer = matchedCombination.associations.images;
-        let images = imagesContainer.image || imagesContainer;
-        if (!Array.isArray(images)) images = [images];
-
-        if (images.length > 0 && images[0].id) {
-            let imageId = images[0].id;
-            let imageApiUrl = `images/products/${product.value.id}/${imageId}`;
-            imageUrl.value = await getImage(imageApiUrl);
-        }
+    // On s'assure d'avoir un ID d'image valide avant d'appeler l'API
+    if (imageIdToFetch && imageIdToFetch !== '0') {
+        const imgUrl = await getImage(`/images/products/${cleanProductId}/${imageIdToFetch}`);
+        if (imgUrl) imageUrl.value = imgUrl;
     }
 }
 
+watch(selectedOptions, async () => {
+    await updateCurrentStock();
+    await updateImage();
+}, { deep: true });
+
 onMounted(async () => {
+    loading.value = true;
     try {
-        loading.value = true;
-        const id = route.params.id;
+        const productId = route.params.id;
+        product.value = await getProduct(productId);
 
-        // Récupération des données du produit
-        product.value = await getProduct(id);
-        productTaxRate.value = await getProductTaxRate(id);
+        productTaxRate.value = await getProductTaxRate(productId);
 
-        // Récupération de toutes les combinaisons du produit pour les images dynamiques
-        try {
-            productCombinations.value = await getCombinations(id);
-        } catch (e) {
-            console.log("Erreur lors de la récupération des combinaisons", e);
+        // CORRECTION : Chargement initial de l'image par défaut
+        const cleanProductId = safeId(product.value.id);
+        const defaultImageId = safeId(product.value.id_default_image);
+        if (defaultImageId && defaultImageId !== '0') {
+            let imgUrl = await getImage(`/images/products/${cleanProductId}/${defaultImageId}`);
+            if (imgUrl) imageUrl.value = imgUrl;
         }
 
-        // Récupération de l'image principale
-        const defaultImg = product.value.id_default_image;
-        if (defaultImg) {
-            let imageApiUrl = null;
-            
-            if (typeof defaultImg === 'object' && defaultImg["@_xlink:href"]) {
-                // Case 1: Object with xlink:href (standard PrestaShop format)
-                imageApiUrl = defaultImg["@_xlink:href"];
-                imageApiUrl = imageApiUrl.replace(/http:\/\/localhost:\d+\/prestashop[^/]*\/api/, "");
-                imageApiUrl = imageApiUrl.replace("?output_format=XML", "");
-            } else {
-                // Case 2: Simple ID (number/string) or object with #text
-                let imgId = defaultImg;
-                if (typeof defaultImg === 'object' && defaultImg['#text']) {
-                    imgId = defaultImg['#text'];
-                }
-                if (imgId && imgId !== '' && imgId !== '0') {
-                    imageApiUrl = `/images/products/${product.value.id}/${imgId}`;
+        const rawCombinations = await getCombinations(productId);
+        const allCombinations = Array.isArray(rawCombinations) ? rawCombinations : (rawCombinations ? [rawCombinations] : []);
+        productCombinations.value = allCombinations;
+
+        if (allCombinations.length > 0) {
+            const optionValuesIds = new Set();
+            for (let i = 0; i < allCombinations.length; i++) {
+                let combValues = allCombinations[i].associations?.product_option_values?.product_option_value;
+                if (!combValues) continue;
+                if (Array.isArray(combValues)) {
+                    for (let j = 0; j < combValues.length; j++) optionValuesIds.add(safeId(combValues[j].id));
+                } else {
+                    optionValuesIds.add(safeId(combValues.id));
                 }
             }
-            
-            if (imageApiUrl) {
-                imageUrl.value = await getImage(imageApiUrl);
-            }
-        }
 
-        // Récupération des variantes (combinaisons)
-        if (product.value.associations && product.value.associations.product_option_values) {
-            let optionValueContainer = product.value.associations.product_option_values;
+            if (optionValuesIds.size > 0) {
+                const filterIds = `[${Array.from(optionValuesIds).join('|')}]`;
 
-            // L'API PrestaShop peut renvoyer une chaîne vide s'il n'y a pas de valeurs
-            if (optionValueContainer && optionValueContainer !== "") {
-                let optionValueIds = optionValueContainer.product_option_value || optionValueContainer;
-                if (!Array.isArray(optionValueIds)) optionValueIds = [optionValueIds];
+                const rawValues = await getProductOptionValues(filterIds);
+                const values = Array.isArray(rawValues) ? rawValues : (rawValues ? [rawValues] : []);
 
-                // On s'assure qu'on a bien des objets avec un id
-                let idsArray = [];
-                for (let i = 0; i < optionValueIds.length; i++) {
-                    let v = optionValueIds[i];
-                    if (v && v.id) {
-                        idsArray.push(v.id);
+                const optionGroupsIds = new Set();
+                for (let i = 0; i < values.length; i++) {
+                    if (values[i]) {
+                        optionGroupsIds.add(safeId(values[i].id_attribute_group));
                     }
                 }
 
-                const ids = idsArray.join('|');
-                if (ids) {
-                    const values = await getProductOptionValues(ids);
-                    if (values.length > 0) {
-                        let groupIdsArray = [];
-                        for (let i = 0; i < values.length; i++) {
-                            let rawGroupId = values[i].id_attribute_group;
-                            let groupId = (typeof rawGroupId === 'object') ? rawGroupId['#text'] : rawGroupId;
-                            if (!groupIdsArray.includes(groupId)) {
-                                groupIdsArray.push(groupId);
-                            }
-                        }
+                const filterGroupIds = `[${Array.from(optionGroupsIds).join('|')}]`;
+                const rawGroups = await getProductOptions(filterGroupIds);
+                const groups = Array.isArray(rawGroups) ? rawGroups : (rawGroups ? [rawGroups] : []);
 
-                        const groupIds = groupIdsArray.join('|');
-                        if (groupIds) {
-                            const groups = await getProductOptions(groupIds);
-                            if (groups.length > 0) {
-                                // Construction de l'objet variants avec des boucles classiques
-                                let allVariants = [];
-                                for (let i = 0; i < groups.length; i++) {
-                                    let group = groups[i];
+                const structuredVariants = [];
+                for (let i = 0; i < groups.length; i++) {
+                    let group = groups[i];
+                    if (!group) continue;
 
-                                    // Trouver les valeurs qui correspondent à ce groupe
-                                    let groupValues = [];
-                                    for (let j = 0; j < values.length; j++) {
-                                        let v = values[j];
-                                        let vGroupId = (typeof v.id_attribute_group === 'object') ? v.id_attribute_group['#text'] : v.id_attribute_group;
+                    let groupValues = values.filter(v => v && safeId(v.id_attribute_group) === safeId(group.id));
+                    structuredVariants.push({
+                        id: safeId(group.id),
+                        name: getLangText(group.name),
+                        values: groupValues.map(v => ({ id: safeId(v.id), name: getLangText(v.name) }))
+                    });
+                }
+                variants.value = structuredVariants;
 
-                                        if (vGroupId == group.id) {
-                                            groupValues.push({
-                                                id: v.id,
-                                                name: getLangText(v.name)
-                                            });
-                                        }
-                                    }
-
-                                    allVariants.push({
-                                        id: group.id,
-                                        name: getLangText(group.public_name) || getLangText(group.name),
-                                        values: groupValues
-                                    });
-                                }
-
-                                // Filtrage pour ne garder QUE Taille et Couleur
-                                let finalVariants = [];
-                                const allowedNames = ['taille', 'couleur', 'size', 'color'];
-
-                                for (let i = 0; i < allVariants.length; i++) {
-                                    let variant = allVariants[i];
-                                    let variantName = variant.name.toLowerCase();
-
-                                    let isAllowed = false;
-                                    for (let j = 0; j < allowedNames.length; j++) {
-                                        if (variantName.includes(allowedNames[j])) {
-                                            isAllowed = true;
-                                            break;
-                                        }
-                                    }
-
-                                    if (isAllowed) {
-                                        finalVariants.push(variant);
-                                    }
-                                }
-                                variants.value = finalVariants;
-
-                                // Initialiser les valeurs sélectionnées par défaut
-                                for (let i = 0; i < finalVariants.length; i++) {
-                                    let variant = finalVariants[i];
-                                    if (variant.values && variant.values.length > 0) {
-                                        // On prend la première valeur par défaut
-                                        selectedOptions.value[variant.id] = variant.values[0].id;
-                                    }
-                                }
-
-                                // Mettre à jour l'image pour correspondre à la sélection initiale
-                                await updateImage();
-                            }
-                        }
+                for (let i = 0; i < structuredVariants.length; i++) {
+                    let v = structuredVariants[i];
+                    if (v && v.values && v.values.length > 0) {
+                        selectedOptions.value[v.name] = safeId(v.values[0].id);
                     }
                 }
             }
         }
 
-        loading.value = false;
+        await updateCurrentStock();
+        // Optionnel : Forcer un premier affichage de l'image de la déclinaison si existante
+        await updateImage();
     } catch (error) {
-        console.log(error);
+        console.error("Erreur au chargement de la fiche produit:", error);
+    } finally {
         loading.value = false;
     }
 });
-onMounted(() => {
-    if (localStorage.getItem("panier") == null) {
-        localStorage.setItem("panier", JSON.stringify([]));
-    }
-})
 
-function getCurrentCombinationId() {
-    if (variants.value.length === 0) {
-        return 0;
-    }
-
-    // Récupérer les valeurs sélectionnées sans utiliser .map()
-    let currentSelectedValues = [];
-    let optionKeys = Object.keys(selectedOptions.value);
-    for (let i = 0; i < optionKeys.length; i++) {
-        let key = optionKeys[i];
-        let val = selectedOptions.value[key];
-        currentSelectedValues.push(String(val));
-    }
-
-    for (let i = 0; i < productCombinations.value.length; i++) {
-        let comb = productCombinations.value[i];
-        
-        if (comb.associations && comb.associations.product_option_values) {
-            let optValuesContainer = comb.associations.product_option_values;
-            let optValues = optValuesContainer.product_option_value || optValuesContainer;
-            
-            if (!Array.isArray(optValues)) {
-                optValues = [optValues];
-            }
-
-            let combValues = [];
-            for (let j = 0; j < optValues.length; j++) {
-                let valObj = optValues[j];
-                if (valObj && valObj.id) {
-                    combValues.push(String(valObj.id));
-                }
-            }
-
-            // Vérifier si les sélections correspondent exactement sans utiliser .includes()
-            if (currentSelectedValues.length === combValues.length) {
-                let isMatch = true;
-                for (let k = 0; k < currentSelectedValues.length; k++) {
-                    let valueToFind = currentSelectedValues[k];
-                    let found = false;
-                    for (let l = 0; l < combValues.length; l++) {
-                        if (combValues[l] === valueToFind) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (found === false) {
-                        isMatch = false;
-                        break;
-                    }
-                }
-
-                if (isMatch === true) {
-                    return comb.id;
-                }
-            }
-        }
-    }
-    return 0;
-}
-
-function putInCart() {
-    if (!product.value) {
-        return;
-    }
-
-    const id_product = product.value.id;
-    const id_product_attribute = getCurrentCombinationId();
-
-    let cart = [];
-    let cartJson = localStorage.getItem("panier");
-    if (cartJson) {
-        try {
-            cart = JSON.parse(cartJson);
-        } catch (e) {
-            cart = [];
-        }
-    }
-
-    // Chercher si le produit avec la même variante existe déjà avec une boucle for
-    let existingIndex = -1;
-    for (let i = 0; i < cart.length; i++) {
-        let item = cart[i];
-        if (item.id_product == id_product && item.id_product_attribute == id_product_attribute) {
-            existingIndex = i;
-            break;
-        }
-    }
-
-    if (existingIndex !== -1) {
-        cart[existingIndex].quantity = cart[existingIndex].quantity + quantity.value;
-    } else {
-        let newItem = {
-            id_product: id_product,
-            id_product_attribute: id_product_attribute,
-            quantity: quantity.value,
-            name: getLangText(product.value.name),
-            price: parseFloat(product.value.price),
-            taxRate: productTaxRate.value,
-            image: imageUrl.value
-        };
-        cart.push(newItem);
-    }
-
-    localStorage.setItem("panier", JSON.stringify(cart));
-    alert("Produit ajouté au panier !");
-}
-
+const calculatedPriceTtc = computed(() => {
+    if (!product.value) return 0;
+    const basePriceHt = parseFloat(product.value.price) || 0;
+    return basePriceHt * (1 + productTaxRate.value / 100);
+});
 </script>
-
 <template>
-    <div class="fiche-container">
-        <div v-if="loading" class="loading-wrapper">
-            <Loading :is-loading="loading"></Loading>
+    <div v-if="loading" class="loading-wrapper">
+        <Loading :is-loading="loading" />
+    </div>
+    <div v-else class="product-page-container">
+
+        <div v-if="product" class="product-content">
+            <div class="product-gallery">
+                <div class="main-image-wrapper">
+                    <img :src="imageUrl || 'https://via.placeholder.com/500'" :alt="getLangText(product.name)"
+                        class="main-image" />
+                </div>
+            </div>
+
+            <div class="product-details">
+                <h1 class="product-title">{{ getLangText(product.name) }}</h1>
+                <p class="product-reference">Référence : <span>{{ product.reference || 'N/A' }}</span></p>
+
+                <div class="price-container">
+                    <span class="price-amount">{{ calculatedPriceTtc.toFixed(2) }} €</span>
+                    <span class="price-tax-label">TTC (inclut taxe {{ productTaxRate }}%)</span>
+                </div>
+
+                <div class="stock-status-wrapper">
+                    <div v-if="stock > 0" class="stock-badge status-ok">
+                        <Icon icon="solar:box-check-bold" class="stock-icon" />
+                        <span>En stock : <strong>{{ stock }}</strong> unités disponibles</span>
+                    </div>
+                    <div v-else class="stock-badge status-empty">
+                        <Icon icon="solar:box-broken-bold" class="stock-icon" />
+                        <span>Rupture de stock (0 disponible)</span>
+                    </div>
+                </div>
+
+                <hr class="section-divider" />
+
+                <div v-if="variants.length > 0" class="variants-container">
+                    <div v-for="variant in variants" :key="variant.id" class="variant-group">
+                        <label class="variant-label">{{ variant.name }}</label>
+                        <select v-model="selectedOptions[variant.name]" class="variant-select">
+                            <option v-for="val in variant.values" :key="val.id" :value="val.id">
+                                {{ val.name }}
+                            </option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="actions-container">
+                    <div class="quantity-selector">
+                        <button @click="quantity > 1 ? quantity-- : null" class="qty-btn"
+                            :disabled="stock === 0">-</button>
+                        <input type="number" v-model.number="quantity" min="1" :max="stock" class="qty-input"
+                            :disabled="stock === 0" />
+                        <button @click="quantity < stock ? quantity++ : null" class="qty-btn"
+                            :disabled="stock === 0 || quantity >= stock">+</button>
+                    </div>
+
+                    <button class="add-to-cart-btn" :disabled="stock === 0 || quantity > stock">
+                        <Icon icon="solar:cart-large-minimalistic-bold" class="btn-icon" />
+                        <span>{{ stock === 0 ? 'Indisponible' : 'Ajouter au panier' }}</span>
+                    </button>
+                </div>
+
+                <div class="product-description-section">
+                    <h3 class="description-title">Description</h3>
+                    <div class="description-body" v-html="getLangText(product.description)"></div>
+                </div>
+            </div>
         </div>
-
-        <template v-else>
-            <div v-if="product" class="product-sheet">
-
-                <!-- Colonne image -->
-                <div class="product-gallery">
-                    <div class="image-wrapper">
-                        <img v-if="imageUrl" :src="imageUrl" :alt="getLangText(product.name)" class="product-image">
-                        <div v-else class="image-placeholder">Pas d'image disponible</div>
-                    </div>
-                </div>
-
-                <!-- Colonne informations -->
-                <div class="product-info">
-                    <h1 class="product-name">{{ getLangText(product.name) }}</h1>
-
-                    <div class="product-price-block">
-                        <span class="product-price">{{ parseFloat(product.price).toFixed(2) }} €</span>
-                        <span class="price-label">HT</span>
-                    </div>
-
-                    <!-- Affichage des Variantes -->
-                    <div v-if="variants.length > 0" class="product-variants">
-                        <div v-for="variant in variants" :key="variant.id" class="variant-group">
-                            <label class="variant-label">{{ variant.name }} :</label>
-                            <select class="variant-select" v-model="selectedOptions[variant.id]" @change="updateImage">
-                                <option v-for="val in variant.values" :key="val.id" :value="val.id">
-                                    {{ val.name }}
-                                </option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <!-- Actions : Quantité et Paiement -->
-                    <div class="product-actions">
-                        <div class="quantity-block">
-                            <label class="variant-label">Quantité :</label>
-                            <div class="quantity-selector">
-                                <button class="qty-btn" @click="quantity > 1 ? quantity-- : null" title="Diminuer">
-                                    <Icon icon="lucide:minus" />
-                                </button>
-                                <input type="number" v-model="quantity" min="1" class="qty-input">
-                                <button class="qty-btn" @click="quantity++" title="Augmenter">
-                                    <Icon icon="lucide:plus" />
-                                </button>
-                            </div>
-                        </div>
-
-                        <button class="add-to-cart-btn" @click="putInCart">
-                            <Icon icon="lucide:shopping-cart" class="btn-icon" />
-                            Ajouter au panier
-                        </button>
-                    </div>
-
-                    <div class="product-description" v-if="getLangText(product.description)">
-                        <h2 class="description-title">Description</h2>
-                        <div class="description-content" v-html="getLangText(product.description)"></div>
-                    </div>
-
-                    <div class="product-description" v-else>
-                        <p class="no-description">Aucune description disponible.</p>
-                    </div>
-                </div>
-
-            </div>
-
-            <div v-else class="empty-state">
-                <p>Produit introuvable.</p>
-            </div>
-        </template>
     </div>
 </template>
 
 <style scoped>
-.fiche-container {
-    max-width: 1100px;
-    margin: 0 auto;
-    padding: 50px 24px;
-    font-family: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    min-height: 100vh;
-}
-
+/* ============================================================================
+   STYLES COMPLÉMENTAIRES ET BADGES DE STOCK
+   ============================================================================ */
 .loading-wrapper {
     display: flex;
     justify-content: center;
@@ -446,188 +308,200 @@ function putInCart() {
     min-height: 50vh;
 }
 
-/* === LAYOUT 2 COLONNES === */
-.product-sheet {
+.product-page-container {
+    max-width: 1200px;
+    margin: 40px auto;
+    padding: 0 20px;
+    font-family: 'Inter', sans-serif;
+    color: #2f3542;
+}
+
+.product-content {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 60px;
-    align-items: start;
 }
 
 @media (max-width: 768px) {
-    .product-sheet {
+    .product-content {
         grid-template-columns: 1fr;
-        gap: 32px;
+        gap: 30px;
     }
 }
 
-/* === IMAGE === */
-.product-gallery {
-    position: sticky;
-    top: 84px;
-    /* sous la navbar */
-}
-
-.image-wrapper {
+.main-image-wrapper {
+    background: #f8f9fa;
     border-radius: 20px;
-    overflow: hidden;
-    background-color: #f0f1f3;
-    aspect-ratio: 1 / 1;
-    box-shadow: 0 8px 32px rgba(47, 53, 66, 0.12);
-}
-
-.product-image {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    transition: transform 0.4s ease;
-}
-
-.product-image:hover {
-    transform: scale(1.03);
-}
-
-.image-placeholder {
-    width: 100%;
-    height: 100%;
+    padding: 20px;
     display: flex;
-    align-items: center;
     justify-content: center;
-    color: #a4b0be;
+    align-items: center;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.main-image {
+    max-width: 100%;
+    max-height: 500px;
+    object-fit: contain;
+    border-radius: 10px;
+}
+
+.product-title {
+    font-size: 2.2rem;
+    font-weight: 800;
+    margin-bottom: 8px;
+    color: #1e2229;
+}
+
+.product-reference {
     font-size: 0.95rem;
+    color: #747d8c;
+    margin-bottom: 24px;
 }
 
-/* === INFORMATIONS === */
-.product-info {
-    display: flex;
+.product-reference span {
+    font-weight: 600;
+    color: #2f3542;
+}
+
+.price-container {
+    background-color: #f1f2f6;
+    padding: 16px 24px;
+    border-radius: 14px;
+    display: inline-flex;
     flex-direction: column;
-    gap: 28px;
+    margin-bottom: 20px;
 }
 
-.product-name {
+.price-amount {
     font-size: 2rem;
     font-weight: 800;
     color: #2f3542;
-    margin: 0;
-    line-height: 1.25;
-    letter-spacing: -0.5px;
 }
 
-.product-price-block {
-    display: flex;
-    align-items: baseline;
+.price-tax-label {
+    font-size: 0.8rem;
+    color: #57606f;
+    margin-top: 4px;
+}
+
+/* Styles spécifiques des statuts de stock */
+.stock-status-wrapper {
+    margin: 10px 0 20px 0;
+}
+
+.stock-badge {
+    display: inline-flex;
+    align-items: center;
     gap: 10px;
-    padding: 18px 24px;
-    background: linear-gradient(135deg, rgba(46, 213, 115, 0.12), rgba(46, 213, 115, 0.04));
-    border-radius: 14px;
-    border: 1px solid rgba(46, 213, 115, 0.2);
-}
-
-.product-price {
-    font-size: 2.2rem;
-    font-weight: 800;
-    color: #2ed573;
-    letter-spacing: -1px;
-}
-
-.price-label {
-    font-size: 0.9rem;
-    color: #747d8c;
+    padding: 10px 18px;
+    border-radius: 30px;
+    font-size: 0.95rem;
     font-weight: 500;
 }
 
-/* === VARIANTES === */
-.product-variants {
+.status-ok {
+    background-color: #e8f5e9;
+    color: #2e7d32;
+    border: 1px solid #c8e6c9;
+}
+
+.status-empty {
+    background-color: #ffebee;
+    color: #c62828;
+    border: 1px solid #ffcdd2;
+}
+
+.stock-icon {
+    font-size: 1.3rem;
+}
+
+.section-divider {
+    border: 0;
+    height: 1px;
+    background: #e4e7eb;
+    margin: 25px 0;
+}
+
+.variants-container {
     display: flex;
     flex-direction: column;
     gap: 16px;
-    padding: 20px 0;
-    border-top: 1px solid #f1f2f6;
-    border-bottom: 1px solid #f1f2f6;
+    margin-bottom: 30px;
 }
 
 .variant-group {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
 }
 
 .variant-label {
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: #2f3542;
+    font-size: 0.9rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: #747d8c;
 }
 
 .variant-select {
-    padding: 12px 16px;
+    padding: 12px;
     border: 1px solid #ced6e0;
     border-radius: 10px;
-    background-color: #ffffff;
+    background-color: white;
     font-size: 1rem;
     color: #2f3542;
-    cursor: pointer;
     outline: none;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    cursor: pointer;
+    transition: border-color 0.2s;
 }
 
 .variant-select:focus {
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    border-color: #2f3542;
 }
 
-/* === ACTIONS === */
-.product-actions {
+.actions-container {
     display: flex;
-    flex-direction: column;
-    gap: 24px;
-    margin-top: 10px;
-    padding-bottom: 30px;
-    border-bottom: 1px solid #f1f2f6;
-}
-
-.quantity-block {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    gap: 20px;
+    margin-bottom: 40px;
 }
 
 .quantity-selector {
     display: flex;
     align-items: center;
-    background: #f8f9fa;
     border: 1px solid #ced6e0;
     border-radius: 12px;
-    width: fit-content;
     overflow: hidden;
+    background: white;
 }
 
 .qty-btn {
-    padding: 10px 18px;
+    background: none;
     border: none;
-    background: transparent;
+    width: 45px;
+    height: 100%;
     font-size: 1.2rem;
-    color: #2f3542;
     cursor: pointer;
     transition: background 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
 }
 
-.qty-btn:hover {
-    background: #e1e4e8;
+.qty-btn:hover:not(:disabled) {
+    background: #f1f2f6;
+}
+
+.qty-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
 }
 
 .qty-input {
-    width: 60px;
+    width: 50px;
     border: none;
-    background: transparent;
+    border-left: 1px solid #ced6e0;
+    border-right: 1px solid #ced6e0;
     text-align: center;
-    font-size: 1.1rem;
+    font-size: 1rem;
     font-weight: 600;
-    color: #2f3542;
     outline: none;
-    appearance: none;
     -moz-appearance: textfield;
 }
 
@@ -638,69 +512,51 @@ function putInCart() {
 }
 
 .add-to-cart-btn {
+    flex: 1;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 12px;
-    padding: 18px 32px;
+    padding: 16px 32px;
     background: linear-gradient(135deg, #2f3542, #4a5568);
     color: white;
     border: none;
     border-radius: 14px;
-    font-size: 1.1rem;
+    font-size: 1.05rem;
     font-weight: 700;
     cursor: pointer;
-    transition: transform 0.2s, box-shadow 0.2s;
-    box-shadow: 0 4px 15px rgba(47, 53, 66, 0.2);
+    transition: transform 0.2s, opacity 0.2s;
 }
 
-.add-to-cart-btn:hover {
+.add-to-cart-btn:hover:not(:disabled) {
     transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(47, 53, 66, 0.3);
 }
 
-.add-to-cart-btn:active {
-    transform: translateY(0);
+.add-to-cart-btn:disabled {
+    background: #ced6e0;
+    color: #a4b0be;
+    cursor: not-allowed;
+    transform: none;
 }
 
 .btn-icon {
     font-size: 1.3rem;
 }
 
-/* === DESCRIPTION === */
+.product-description-section {
+    margin-top: 20px;
+}
+
 .description-title {
-    font-size: 1rem;
-    font-weight: 700;
-    color: #747d8c;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin: 0 0 14px 0;
-}
-
-.description-content {
-    font-size: 1rem;
-    line-height: 1.75;
-    color: #4a5568;
-}
-
-/* Reset du HTML injecté par PrestaShop */
-.description-content :deep(p) {
-    margin: 0 0 12px 0;
-}
-
-.no-description {
-    color: #a4b0be;
-    font-style: italic;
-}
-
-/* === EMPTY STATE === */
-.empty-state {
-    text-align: center;
-    padding: 80px 20px;
-    color: #a4b0be;
     font-size: 1.2rem;
-    background: #ffffff;
-    border-radius: 16px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
+    font-weight: 700;
+    margin-bottom: 12px;
+    color: #2f3542;
+}
+
+.description-body {
+    font-size: 1rem;
+    line-height: 1.6;
+    color: #57606f;
 }
 </style>

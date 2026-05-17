@@ -2,7 +2,7 @@ import { getXml, postXml, putXml, deleteXml } from '@/service/api';
 import { runResetForTargets } from '@/service/resetService';
 
 // ============================================================================
-// CONFIGURATION DU ROLLBACK (CIBLE DE RÉINITIALISATION)
+// CONFIGURATION DU ROLLBACK
 // ============================================================================
 export const resetOrderTargets = [
     {
@@ -32,13 +32,8 @@ export const rollbackOrders = async (logCallback) => {
 };
 
 // ============================================================================
-// FONCTIONS UTILITAIRES DE PARSING
+// FONCTIONS UTILITAIRES
 // ============================================================================
-
-/**
- * Parse la chaîne de caractères complexe du CSV représentant les achats.
- * Gère correctement les guillemets et les valeurs vides.
- */
 function parseAchat(achatString) {
     if (!achatString || achatString.indexOf('[') === -1 || achatString.indexOf(']') === -1) {
         return [];
@@ -57,7 +52,6 @@ function parseAchat(achatString) {
         const cleanTuple = tuple.slice(1, -1);
         const parts = cleanTuple.split(';');
 
-        // Nettoyage radical des doubles guillemets d'encapsulation CSV
         const ref = parts[0] ? parts[0].replace(/["']/g, '').trim() : '';
         const qty = parts[1] ? parseInt(parts[1].trim(), 10) || 1 : 1;
         const variant = parts[2] ? parts[2].replace(/["']/g, '').trim() : '';
@@ -78,13 +72,10 @@ function extractId(node) {
 }
 
 // ============================================================================
-// FONCTION PRINCIPALE : IMPORTATION DES COMMANDES ET PANIERS
+// FONCTION PRINCIPALE : IMPORTATION
 // ============================================================================
 export const processOrderImport = async (data, logCallback) => {
 
-    // ========================================================================
-    // NETTOYAGE : FORCER TOUTES LES COLONNES EN MINUSCULES (Ignorer la casse)
-    // ========================================================================
     if (data && data.length > 0) {
         data = data.map(row => {
             const newRow = {};
@@ -98,9 +89,6 @@ export const processOrderImport = async (data, logCallback) => {
         return;
     }
 
-    // ========================================================================
-    // SÉCURITÉ 1 : VÉRIFICATION GLOBALE DES COLONNES CONFORMES
-    // ========================================================================
     const expectedColumns = ['date', 'nom', 'email', 'pwd', 'adresse', 'achat', 'etat'];
     const actualColumns = Object.keys(data[0]);
     const missingColumns = expectedColumns.filter(col => !actualColumns.includes(col));
@@ -115,27 +103,34 @@ export const processOrderImport = async (data, logCallback) => {
         const statesResp = await getXml('/order_states?display=full');
         const allStates = statesResp?.prestashop?.order_states?.order_state || [];
         const stateList = Array.isArray(allStates) ? allStates : [allStates];
-
         logCallback('info', `${stateList.length} états de commande chargés pour mapping.`);
+
+        let activeCountryId = '1';
+        try {
+            const countrySearch = await getXml('/countries?filter[active]=[1]&display=[id]');
+            const countries = countrySearch?.prestashop?.countries?.country;
+            if (countries) {
+                activeCountryId = extractId(Array.isArray(countries) ? countries[0].id : countries.id);
+                logCallback('info', `Pays actif dynamique trouvé (ID: ${activeCountryId}).`);
+            } else {
+                logCallback('warn', 'Aucun pays actif trouvé, utilisation de l\'ID 1 par défaut.');
+            }
+        } catch (e) {
+            logCallback('warn', 'Erreur lors de la recherche d\'un pays actif. Utilisation de l\'ID 1.');
+        }
 
         for (const [index, row] of data.entries()) {
             logCallback('info', `Traitement de la ligne ${index + 1} (Client : ${row.nom || 'Inconnu'})...`);
 
-            // ========================================================================
-            // SÉCURITÉ 2 : CONTRÔLE DES DONNÉES OBLIGATOIRES
-            // ========================================================================
             if (!row.email || String(row.email).trim() === '' ||
                 !row.nom || String(row.nom).trim() === '' ||
                 !row.adresse || String(row.adresse).trim() === '' ||
                 !row.achat || String(row.achat).trim() === '' ||
                 !row.date || String(row.date).trim() === '') {
-                logCallback('error', `Ligne ${index + 1} ignorée : Des données vitales sont manquantes (email, nom, adresse, date ou achat).`);
+                logCallback('error', `Ligne ${index + 1} ignorée : Des données vitales sont manquantes.`);
                 continue;
             }
 
-            // ========================================================================
-            // SÉCURITÉ 3 : VALIDATION DU FORMAT DE L'EMAIL
-            // ========================================================================
             const email = String(row.email).trim();
             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
             if (!emailRegex.test(email)) {
@@ -143,12 +138,8 @@ export const processOrderImport = async (data, logCallback) => {
                 continue;
             }
 
-            // ========================================================================
-            // SÉCURITÉ 4 : VALIDATION STRICTE DU FORMAT DE DATE (DD/MM/YYYY)
-            // ========================================================================
             const rawDate = String(row.date).trim();
             const dateRegex = /^\d{2}\/\d{2}\/\d{4}$/;
-
             if (!dateRegex.test(rawDate)) {
                 logCallback('error', `Ligne ${index + 1} ignorée : Format de date "${rawDate}" invalide. Attendu : DD/MM/YYYY.`);
                 continue;
@@ -157,18 +148,12 @@ export const processOrderImport = async (data, logCallback) => {
             const dateParts = rawDate.split('/');
             const formattedDate = `${dateParts[2]}-${dateParts[1].padStart(2, '0')}-${dateParts[0].padStart(2, '0')}`;
 
-            // ========================================================================
-            // SÉCURITÉ 5 : EXTRACTION ET VÉRIFICATION DU PANIER
-            // ========================================================================
             const purchasedItems = parseAchat(row.achat);
             if (purchasedItems.length === 0) {
                 logCallback('error', `Ligne ${index + 1} ignorée : Impossible de décoder la syntaxe de la colonne achat.`);
                 continue;
             }
 
-            // ========================================================================
-            // RÉSOLUTION OU CRÉATION DU CLIENT
-            // ========================================================================
             let customerId = null;
             const customerSearch = await getXml(`/customers?filter[email]=[${email}]&display=[id]`);
             let customer = customerSearch?.prestashop?.customers?.customer;
@@ -193,9 +178,6 @@ export const processOrderImport = async (data, logCallback) => {
                 customerId = extractId(newCustomer?.prestashop?.customer?.id);
             }
 
-            // ========================================================================
-            // RÉSOLUTION OU CRÉATION DE L'ADRESSE
-            // ========================================================================
             let addressId = null;
             const addressSearch = await getXml(`/addresses?filter[id_customer]=[${customerId}]&filter[address1]=[${row.adresse.trim()}]&display=[id]`);
             let address = addressSearch?.prestashop?.addresses?.address;
@@ -214,7 +196,7 @@ export const processOrderImport = async (data, logCallback) => {
                             address1: row.adresse.trim(),
                             postcode: '101',
                             city: 'Antananarivo',
-                            id_country: 1,
+                            id_country: activeCountryId,
                             phone: '0340000000'
                         }
                     }
@@ -223,16 +205,14 @@ export const processOrderImport = async (data, logCallback) => {
                 addressId = extractId(newAddress?.prestashop?.address?.id);
             }
 
-            // ========================================================================
-            // ANALYSE DES PRODUITS ET CONTRÔLE D'EXISTENCE
-            // ========================================================================
             let cartRowsXml = '';
             let productCheckFailed = false;
+            let cartTotal = 0;
 
             for (let i = 0; i < purchasedItems.length; i++) {
                 const item = purchasedItems[i];
 
-                const prodSearch = await getXml(`/products?filter[reference]=[${item.reference}]&display=[id]`);
+                const prodSearch = await getXml(`/products?filter[reference]=[${item.reference}]&display=[id,price]`);
                 let foundProd = prodSearch?.prestashop?.products?.product;
 
                 if (!foundProd) {
@@ -244,13 +224,20 @@ export const processOrderImport = async (data, logCallback) => {
                 if (Array.isArray(foundProd)) foundProd = foundProd[0];
                 const idProduct = extractId(foundProd.id);
 
+                const itemPrice = parseFloat(foundProd.price || 0);
+                cartTotal += (itemPrice * item.quantity);
+
                 let idProductAttribute = '0';
+
                 if (item.variant && item.variant !== '') {
-                    const combSearch = await getXml(`/combinations?filter[id_product]=[${idProduct}]&filter[reference]=%${item.variant}%&display=[id]`);
+                    const exactCombinationRef = `${item.reference}_${item.variant}`;
+                    const combSearch = await getXml(`/combinations?filter[id_product]=[${idProduct}]&filter[reference]=[${exactCombinationRef}]&display=[id]`);
                     let foundComb = combSearch?.prestashop?.combinations?.combination;
                     if (foundComb) {
                         if (Array.isArray(foundComb)) foundComb = foundComb[0];
                         idProductAttribute = extractId(foundComb.id);
+                    } else {
+                        logCallback('warn', `Avertissement: La variante ${exactCombinationRef} est introuvable.`);
                     }
                 }
 
@@ -266,9 +253,6 @@ export const processOrderImport = async (data, logCallback) => {
 
             if (productCheckFailed) continue;
 
-            // ========================================================================
-            // CRÉATION DU PANIER (Correction apportée sur la balise id_customer)
-            // ========================================================================
             const cartXmlPayload = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
     <cart>
@@ -296,14 +280,10 @@ ${cartRowsXml}
                 continue;
             }
 
-            // ========================================================================
-            // LA RÈGLE D'OR (PANIERS ABANDONNÉS HISTORIQUES)
-            // ========================================================================
             const etatBrut = row.etat ? String(row.etat).trim().toLowerCase() : '';
 
             if (etatBrut === '' || etatBrut === 'null') {
                 logCallback('info', `État vide détecté. Sauvegarde du Panier Abandonné #${cartId}...`);
-
                 const updateCartDatePayload = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
     <cart>
@@ -318,11 +298,6 @@ ${cartRowsXml}
         <id_carrier>1</id_carrier>
         <date_add>${formattedDate} 12:00:00</date_add>
         <date_upd>${formattedDate} 12:00:00</date_upd>
-        <associations>
-            <cart_rows nodeType="cart_row" virtualEntity="true">
-${cartRowsXml}
-            </cart_rows>
-        </associations>
     </cart>
 </prestashop>`;
 
@@ -331,9 +306,6 @@ ${cartRowsXml}
                 continue;
             }
 
-            // ========================================================================
-            // CRÉATION DE LA COMMANDE
-            // ========================================================================
             let orderStateId = '2';
 
             for (let s = 0; s < stateList.length; s++) {
@@ -362,14 +334,16 @@ ${cartRowsXml}
         <id_lang>1</id_lang>
         <id_customer>${customerId}</id_customer>
         <id_carrier>1</id_carrier>
+        <id_shop_group>1</id_shop_group>
+        <id_shop>1</id_shop>
         <current_state>${orderStateId}</current_state>
         <payment>Paiement importé</payment>
-        <module>importcsv</module>
-        <total_paid>0.00</total_paid>
-        <total_paid_real>0.00</total_paid_real>
-        <total_products>0.00</total_products>
-        <total_products_wt>0.00</total_products_wt>
-        <conversion_rate>1</conversion_rate>
+        <module>ps_wirepayment</module>
+        <total_paid>${cartTotal.toFixed(6)}</total_paid>
+        <total_paid_real>${cartTotal.toFixed(6)}</total_paid_real>
+        <total_products>${cartTotal.toFixed(6)}</total_products>
+        <total_products_wt>${cartTotal.toFixed(6)}</total_products_wt>
+        <conversion_rate>1.000000</conversion_rate>
     </order>
 </prestashop>`;
 
@@ -379,6 +353,7 @@ ${cartRowsXml}
             if (orderId) {
                 logCallback('info', `Mise à jour de la date historique de la commande #${orderId}...`);
 
+                // CORRECTION : Le payload PUT est désormais strictement identique au POST pour éviter l'erreur 400
                 const updateOrderDatePayload = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
     <order>
@@ -390,32 +365,25 @@ ${cartRowsXml}
         <id_lang>1</id_lang>
         <id_customer>${customerId}</id_customer>
         <id_carrier>1</id_carrier>
+        <id_shop_group>1</id_shop_group>
+        <id_shop>1</id_shop>
         <current_state>${orderStateId}</current_state>
         <payment>Paiement importé</payment>
-        <module>importcsv</module>
+        <module>ps_wirepayment</module>
+        <total_paid>${cartTotal.toFixed(6)}</total_paid>
+        <total_paid_real>${cartTotal.toFixed(6)}</total_paid_real>
+        <total_products>${cartTotal.toFixed(6)}</total_products>
+        <total_products_wt>${cartTotal.toFixed(6)}</total_products_wt>
+        <conversion_rate>1.000000</conversion_rate>
         <date_add>${formattedDate} 12:00:00</date_add>
         <date_upd>${formattedDate} 12:00:00</date_upd>
     </order>
 </prestashop>`;
                 await putXml(`/orders/${orderId}`, updateOrderDatePayload);
-
-                const cleanCartPayload = `<?xml version="1.0" encoding="UTF-8"?>
-<prestashop>
-    <cart>
-        <id>${cartId}</id>
-        <id_customer>${customerId}</id_customer>
-        <id_address_delivery>${addressId}</id_address_delivery>
-        <id_address_invoice>${addressId}</id_address_invoice>
-        <id_currency>1</id_currency>
-        <id_lang>1</id_lang>
-        <associations>
-            <cart_rows></cart_rows>
-        </associations>
-    </cart>
-</prestashop>`;
-                await putXml(`/carts/${cartId}`, cleanCartPayload);
-
                 logCallback('success', `Ligne ${index + 1} importée avec succès. Commande ID : ${orderId}`);
+            } else {
+                logCallback('error', `La ligne ${index + 1} a échoué silencieusement (PrestaShop a rejeté la commande).`);
+                logCallback('error', `Détail du refus API : ${JSON.stringify(newOrderResp)}`);
             }
         }
 
