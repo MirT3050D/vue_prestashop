@@ -69,15 +69,37 @@ async function loadProducts() {
 
             // Badge HOT/NEW
             let badge = null;
-            console.log("product", product);
-            console.log("product.available_date", product.available_date);
-            if (product.available_date != null) {
-                console.log("misy");
-                let now = new Date();
-                let addedDate = new Date(product.available_date.replace(' ', 'T'));
-                let diffDays = (now - addedDate) / (1000 * 60 * 60 * 24);
-                if (diffDays <= 1) badge = 'HOT';
-                else if (diffDays <= 7) badge = 'NEW';
+
+            // 1. On sécurise : la date doit exister ET ne pas être la valeur par défaut vide
+            if (product.available_date && product.available_date !== '0000-00-00') {
+
+                // Précaution : au cas où l'API renvoie un objet au lieu d'une string
+                let dateString = typeof product.available_date === 'object'
+                    ? product.available_date['#text']
+                    : product.available_date;
+
+                if (dateString && dateString !== '0000-00-00') {
+                    let now = new Date();
+                    let addedDate = new Date(dateString.replace(' ', 'T'));
+
+                    // On s'assure que la date est valide
+                    if (!isNaN(addedDate.getTime())) {
+                        let diffDays = (now - addedDate) / (1000 * 60 * 60 * 24);
+
+                        // 2. Gestion des produits dans le futur (Pré-commandes)
+                        if (diffDays < 0) {
+                            badge = 'À VENIR'; // Tu peux mettre 'PRE-ORDER' ou laisser null si tu ne veux pas de badge
+                        }
+                        // 3. Produit dispo depuis moins de 24 heures
+                        else if (diffDays >= 0 && diffDays <= 1) {
+                            badge = 'HOT';
+                        }
+                        // 4. Produit dispo entre 1 et 7 jours
+                        else if (diffDays > 1 && diffDays <= 7) {
+                            badge = 'NEW';
+                        }
+                    }
+                }
             }
             products.value[i].badge = badge;
         }
