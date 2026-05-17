@@ -10,7 +10,11 @@ const loading = ref(false);
 const products = ref([]);
 const movements = ref([]);
 const combinations = ref([]);
+
+// Filtres
 const selectedProductId = ref('all');
+const startDate = ref('');
+const endDate = ref('');
 
 // ============================================================================
 // 1. SÉCURITÉ NETTOYÉE ET ROBUSTE
@@ -51,13 +55,11 @@ function getMovementVariantName(mvt) {
 
     if (!attrId || attrId === '0') return 'Produit simple';
 
-    // Recherche dans le dictionnaire global
     const comb = combinations.value.find(c => String(safeValue(c.id)) === String(attrId));
     if (comb && comb.reference) {
         const refText = safeValue(comb.reference);
         const parts = refText.split('_');
         if (parts.length > 1) {
-            // Capitaliser la première lettre pour faire plus joli (ex: ngoza -> Ngoza)
             const variantName = parts.slice(1).join(' ');
             return variantName.charAt(0).toUpperCase() + variantName.slice(1);
         }
@@ -74,12 +76,11 @@ function getReasonLabel(reasonId, sign) {
 }
 
 // ============================================================================
-// CHARGEMENT PRINCIPAL : PRODUITS ET COMBINAISONS
+// CHARGEMENT PRINCIPAL
 // ============================================================================
 onMounted(async () => {
     loading.value = true;
     try {
-        // 1. Chargement de TOUS les produits et TOUTES les combinaisons d'un coup
         const [rawProducts, responseCombs, responseMvts] = await Promise.all([
             getProducts('display=full'),
             getXml('/combinations?display=full'),
@@ -91,11 +92,9 @@ onMounted(async () => {
         const combsList = responseCombs?.prestashop?.combinations?.combination;
         combinations.value = Array.isArray(combsList) ? combsList : (combsList ? [combsList] : []);
 
-        // 2. Traitement des mouvements
         const rawMvts = responseMvts?.prestashop?.stock_mvts?.stock_mvt;
         let mvtsArray = Array.isArray(rawMvts) ? rawMvts : (rawMvts ? [rawMvts] : []);
 
-        // Tri du plus récent au plus ancien
         mvtsArray.sort((a, b) => {
             const dateA = new Date(safeValue(a.date_add)).getTime();
             const dateB = new Date(safeValue(b.date_add)).getTime();
@@ -111,20 +110,48 @@ onMounted(async () => {
 });
 
 // ============================================================================
-// FILTRAGE LOGIQUE DU TABLEAU
+// FILTRAGE LOGIQUE (Article + Dates)
 // ============================================================================
 const filteredMovements = computed(() => {
-    let allMvts = movements.value;
-    if (selectedProductId.value === 'all') return allMvts;
+    let result = movements.value;
 
-    return allMvts.filter(mvt => {
-        let mvtId = safeValue(mvt.id_product);
-        if (!mvtId || mvtId === '0') {
-            mvtId = safeValue(mvt.id_order);
-        }
-        return String(mvtId) === String(selectedProductId.value);
-    });
+    // 1. Filtre par article
+    if (selectedProductId.value !== 'all') {
+        result = result.filter(mvt => {
+            let mvtId = safeValue(mvt.id_product);
+            if (!mvtId || mvtId === '0') mvtId = safeValue(mvt.id_order);
+            return String(mvtId) === String(selectedProductId.value);
+        });
+    }
+
+    // 2. Filtre par date de début (Du)
+    if (startDate.value) {
+        const start = new Date(startDate.value);
+        start.setHours(0, 0, 0, 0); // Permet d'inclure les mouvements dès minuit
+        result = result.filter(mvt => {
+            const mvtDate = new Date(safeValue(mvt.date_add));
+            return mvtDate >= start;
+        });
+    }
+
+    // 3. Filtre par date de fin (Au)
+    if (endDate.value) {
+        const end = new Date(endDate.value);
+        end.setHours(23, 59, 59, 999); // Permet d'inclure les mouvements jusqu'à 23h59
+        result = result.filter(mvt => {
+            const mvtDate = new Date(safeValue(mvt.date_add));
+            return mvtDate <= end;
+        });
+    }
+
+    return result;
 });
+
+// Fonction pour réinitialiser les dates
+function clearDates() {
+    startDate.value = '';
+    endDate.value = '';
+}
 </script>
 
 <template>
@@ -138,13 +165,29 @@ const filteredMovements = computed(() => {
         </div>
 
         <div class="filter-section">
-            <span class="filter-label">Filtrer par article :</span>
-            <select v-model="selectedProductId" class="filter-select">
-                <option value="all">Tous les articles</option>
-                <option v-for="product in products" :key="product.id" :value="safeValue(product.id)">
-                    {{ getLangText(product.name) }} (Réf: {{ safeValue(product.reference) }})
-                </option>
-            </select>
+            <div class="filter-group">
+                <span class="filter-label">Article :</span>
+                <select v-model="selectedProductId" class="filter-input filter-select">
+                    <option value="all">Tous les articles</option>
+                    <option v-for="product in products" :key="product.id" :value="safeValue(product.id)">
+                        {{ getLangText(product.name) }} (Réf: {{ safeValue(product.reference) }})
+                    </option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <span class="filter-label">Du :</span>
+                <input type="date" v-model="startDate" class="filter-input date-input" />
+            </div>
+
+            <div class="filter-group">
+                <span class="filter-label">Au :</span>
+                <input type="date" v-model="endDate" class="filter-input date-input" />
+            </div>
+
+            <button v-if="startDate || endDate" @click="clearDates" class="btn-clear" title="Effacer les dates">
+                ✕
+            </button>
         </div>
 
         <div class="table-wrapper">
@@ -164,20 +207,17 @@ const filteredMovements = computed(() => {
                         <td>{{ safeValue(mvt.date_add) }}</td>
                         <td><strong>{{ getMovementProductName(mvt) }}</strong></td>
                         <td class="text-muted">{{ getMovementVariantName(mvt) }}</td>
-
                         <td>
                             <span :class="['badge-type', String(safeValue(mvt.sign)) === '1' ? 'mvt-in' : 'mvt-out']">
                                 {{ String(safeValue(mvt.sign)) === '1' ? '🟢 Entrée' : '🔴 Sortie' }}
                             </span>
                         </td>
-
                         <td class="qty-cell">
                             <strong>
                                 {{ String(safeValue(mvt.sign)) === '1' ? '+' : '-' }}{{ safeValue(mvt.physical_quantity)
                                 }}
                             </strong>
                         </td>
-
                         <td class="text-muted">{{ getReasonLabel(safeValue(mvt.id_stock_mvt_reason),
                             safeValue(mvt.sign)) }}</td>
                     </tr>
@@ -185,7 +225,7 @@ const filteredMovements = computed(() => {
             </table>
 
             <div v-else-if="!loading" class="no-data-alert">
-                Aucun mouvement de stock enregistré pour le moment.
+                Aucun mouvement de stock trouvé pour ces critères de recherche.
             </div>
         </div>
     </div>
@@ -230,6 +270,7 @@ const filteredMovements = computed(() => {
     font-size: 0.95rem;
 }
 
+/* Nouveaux styles pour la barre de filtre avec les dates */
 .filter-section {
     background-color: #f8f9fa;
     border: 1px solid #e4e7eb;
@@ -237,8 +278,15 @@ const filteredMovements = computed(() => {
     border-radius: 8px;
     margin-bottom: 25px;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 15px;
+    gap: 20px;
+}
+
+.filter-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 
 .filter-label {
@@ -247,15 +295,45 @@ const filteredMovements = computed(() => {
     font-size: 0.95rem;
 }
 
-.filter-select {
+.filter-input {
     padding: 8px 12px;
     border: 1px solid #ced6e0;
     border-radius: 6px;
     background-color: white;
     font-size: 0.95rem;
     outline: none;
-    min-width: 300px;
     cursor: pointer;
+    color: #2f3542;
+}
+
+.filter-select {
+    min-width: 250px;
+}
+
+.date-input {
+    min-width: 140px;
+    font-family: inherit;
+}
+
+.btn-clear {
+    background-color: #ffebee;
+    color: #c62828;
+    border: 1px solid #ffcdd2;
+    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: bold;
+    transition: all 0.2s ease;
+}
+
+.btn-clear:hover {
+    background-color: #ffcdd2;
+    transform: scale(1.05);
 }
 
 .table-wrapper {
