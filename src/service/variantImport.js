@@ -42,36 +42,70 @@ export const rollbackDeclinaison = async (logCallback) => {
 // ============================================================================
 // FONCTION PRINCIPALE D'IMPORT DES VARIATIONS
 // ============================================================================
-export const processImport = async (data, logCallback) => {
+export const processVariantImport = async (data, logCallback) => {
   const optionCache = {};
   const optionValueCache = {};
-  const employeeId = 1; // Ton ID SuperAdmin Mir Rahajarijaona pour signer les mvts
+  const employeeId = 1; // Ton ID SuperAdmin pour signer les mvts
 
+  // ========================================================================
+  // SÉCURITÉ 1 : VÉRIFICATION GLOBALE DES COLONNES DU CSV
+  // ========================================================================
   if (!data || data.length === 0) {
     logCallback('warn', 'Le fichier CSV des variations est vide.');
+    return;
+  }
+
+  const expectedColumns = ['reference', 'specificité', 'karazany', 'stock_initial', 'prix_vente_ttc'];
+  const actualColumns = Object.keys(data[0]);
+  const missingColumns = expectedColumns.filter(col => !actualColumns.includes(col));
+
+  if (missingColumns.length > 0) {
+    logCallback('error', `CRITIQUE : Colonnes manquantes dans le CSV : ${missingColumns.join(', ')}`);
+    logCallback('error', 'Annulation totale de l\'import des variations pour protéger la base de données.');
     return;
   }
 
   try {
     for (const [index, row] of data.entries()) {
 
-      // Extraction et sécurisation des données du CSV
-      const reference = row.reference ? String(row.reference).trim() : '';
-      const specificite = row['specificité'] ? String(row['specificité']).trim() : '';
-      const karazany = row.karazany ? String(row.karazany).trim() : '';
-
-      const stockRaw = row.stock_initial ? String(row.stock_initial).trim() : '';
-      const stockInitial = parseInt(stockRaw, 10) || 0;
-
-      const prixRaw = row.prix_vente_ttc ? String(row.prix_vente_ttc).replace(',', '.') : '0';
-      const prixVenteTTC = parseFloat(prixRaw) || 0;
-
-      if (!reference) {
-        logCallback('warn', `Ligne ${index + 1} ignorée : Référence du produit manquante.`);
+      // ========================================================================
+      // SÉCURITÉ 2 : DONNÉES OBLIGATOIRES (La référence)
+      // ========================================================================
+      if (!row.reference || String(row.reference).trim() === '') {
+        logCallback('error', `Ligne ${index + 1} ignorée : Référence du produit manquante.`);
         continue;
       }
 
+      const reference = String(row.reference).trim();
+      const specificite = row['specificité'] ? String(row['specificité']).trim() : '';
+      const karazany = row.karazany ? String(row.karazany).trim() : '';
+
       logCallback('info', `Traitement de la ligne ${index + 1} (Réf: ${reference})...`);
+
+      // ========================================================================
+      // SÉCURITÉ 3 : MONTANTS POSITIFS ET VALIDES (Stock et Prix)
+      // ========================================================================
+      const stockRaw = row.stock_initial ? String(row.stock_initial).trim() : '';
+      let stockInitial = 0;
+
+      if (stockRaw !== '') {
+        stockInitial = parseInt(stockRaw, 10);
+        if (isNaN(stockInitial) || stockInitial < 0) {
+          logCallback('error', `Ligne ${index + 1} ignorée : Le stock initial ("${stockRaw}") est invalide ou négatif.`);
+          continue;
+        }
+      }
+
+      const prixRaw = row.prix_vente_ttc ? String(row.prix_vente_ttc).replace(',', '.') : '';
+      let prixVenteTTC = 0;
+
+      if (prixRaw !== '') {
+        prixVenteTTC = parseFloat(prixRaw);
+        if (isNaN(prixVenteTTC) || prixVenteTTC < 0) {
+          logCallback('error', `Ligne ${index + 1} ignorée : Le prix de vente TTC ("${prixRaw}") est invalide ou négatif.`);
+          continue;
+        }
+      }
 
       // 1. Trouver le produit parent via sa référence
       const productSearch = await getXml(`/products?filter[reference]=[${reference}]&display=[id,price]`);
@@ -234,7 +268,6 @@ export const processImport = async (data, logCallback) => {
           if (stockAvailable) {
             if (Array.isArray(stockAvailable)) stockAvailable = stockAvailable[0];
 
-            // Extraction de l'ancienne quantité (généralement 0 à la création d'une combinaison)
             const oldQty = parseInt(stockAvailable.quantity['#text'] || stockAvailable.quantity, 10) || 0;
             const delta = stockInitial - oldQty;
 
@@ -283,4 +316,4 @@ export const processImport = async (data, logCallback) => {
     logCallback('error', 'Annulation de l\'opération et lancement de la réinitialisation (Rollback)...');
     await rollbackDeclinaison(logCallback);
   }
-};
+}

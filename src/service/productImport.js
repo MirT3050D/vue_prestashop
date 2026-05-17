@@ -18,14 +18,15 @@ export const processProductImport = async (data, logCallback) => {
   // SÉCURITÉ 1 : VÉRIFICATION GLOBALE DES COLONNES DU CSV
   // ========================================================================
   if (data.length > 0) {
-    const expectedColumns = ['date_produit', 'nom', 'reference', 'prix_ttc', 'Taxe', 'categorie'];
+    // CORRECTION : Ajout de 'prix_achat' dans les colonnes obligatoires
+    const expectedColumns = ['date_availability_produit', 'nom', 'reference', 'prix_ttc', 'Taxe', 'categorie', 'prix_achat'];
     const actualColumns = Object.keys(data[0]);
     const missingColumns = expectedColumns.filter(col => !actualColumns.includes(col));
 
     if (missingColumns.length > 0) {
       logCallback('error', `CRITIQUE : Colonnes manquantes dans le CSV : ${missingColumns.join(', ')}`);
       logCallback('error', 'Annulation totale de l\'import pour protéger la base de données.');
-      return; // Stoppe net le programme si le fichier n'a pas les bonnes colonnes
+      return;
     }
   }
 
@@ -38,11 +39,11 @@ export const processProductImport = async (data, logCallback) => {
       // ========================================================================
       if (!row.nom || String(row.nom).trim() === '' || !row.reference || String(row.reference).trim() === '') {
         logCallback('error', `Ligne ${index + 1} ignorée : Le "nom" ou la "reference" est manquant.`);
-        continue; // Saute cette ligne et passe à la suivante
+        continue;
       }
 
       // ========================================================================
-      // SÉCURITÉ 3 : MONTANTS POSITIFS ET VALIDES (Prix et Taxe)
+      // SÉCURITÉ 3 : MONTANTS POSITIFS ET VALIDES (Prix, Taxe, et Prix d'achat)
       // ========================================================================
       const priceRaw = row.prix_ttc ? String(row.prix_ttc).replace(',', '.') : '0';
       const priceTTC = parseFloat(priceRaw);
@@ -62,14 +63,19 @@ export const processProductImport = async (data, logCallback) => {
 
       const priceHT = priceTTC / (1 + (taxRate / 100));
 
+      // NOUVEAU : Traitement du prix d'achat
+      const prixAchatRaw = row.prix_achat ? String(row.prix_achat).replace(',', '.') : '0';
+      const wholesalePrice = parseFloat(prixAchatRaw);
+      const finalWholesalePrice = isNaN(wholesalePrice) || wholesalePrice < 0 ? 0 : wholesalePrice;
+
       // ========================================================================
       // SÉCURITÉ 4 : DATE (Format strict DD/MM/YYYY)
       // ========================================================================
-      const rawDate = row.date_produit; // On utilise la bonne colonne
+      // CORRECTION : On cible le nom de colonne exact du CSV
+      const rawDate = row.date_availability_produit;
       let formattedDate = null;
 
       if (rawDate && rawDate.trim() !== '') {
-        // Regex : 2 chiffres, un slash, 2 chiffres, un slash, 4 chiffres
         const dateRegex = /^\d{2}\/\d{2}\/\d{4}$/;
 
         if (!dateRegex.test(rawDate.trim())) {
@@ -77,7 +83,6 @@ export const processProductImport = async (data, logCallback) => {
           continue;
         }
 
-        // Puisqu'on est sûr à 100% du format grâce au Regex, on formate pour PrestaShop (AAAA-MM-JJ)
         const parts = rawDate.trim().split('/');
         formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
       } else {
@@ -87,7 +92,7 @@ export const processProductImport = async (data, logCallback) => {
       // ========================================================================
       // RÉSOLUTION DES TAXES
       // ========================================================================
-      let taxRulesGroupId = '0'; // Par défaut, 0 = aucune taxe
+      let taxRulesGroupId = '0';
       if (taxRate > 0) {
         if (taxCache[taxRate]) {
           taxRulesGroupId = taxCache[taxRate];
@@ -120,21 +125,19 @@ export const processProductImport = async (data, logCallback) => {
       // ========================================================================
       // RÉSOLUTION / CRÉATION DES CATÉGORIES
       // ========================================================================
-      let categoryId = '2'; // Catégorie "Accueil" par défaut
+      let categoryId = '2';
       if (row.categorie) {
         const catName = row.categorie.trim();
         if (categoryCache[catName]) {
           categoryId = categoryCache[catName];
         } else {
           try {
-            // Chercher si la catégorie existe
             const catResp = await getXml(`/categories?filter[name]=[${catName}]&display=full`);
             const categories = catResp?.prestashop?.categories?.category;
 
             if (categories) {
               categoryId = Array.isArray(categories) ? categories[0].id : categories.id;
             } else {
-              // Créer la catégorie si introuvable
               logCallback('info', `Création de la nouvelle catégorie "${catName}"...`);
               const newCatPayload = {
                 prestashop: {
@@ -183,6 +186,7 @@ export const processProductImport = async (data, logCallback) => {
             active: 1,
             reference: row.reference,
             price: priceHT.toFixed(6),
+            wholesale_price: finalWholesalePrice.toFixed(6), // NOUVEAU : Envoi du prix d'achat
             id_tax_rules_group: taxRulesGroupId,
             id_category_default: categoryId,
             name: {
@@ -212,7 +216,7 @@ export const processProductImport = async (data, logCallback) => {
       const productId = newProductResp?.prestashop?.product?.id;
 
       // ========================================================================
-      // FORÇAGE DE LA DATE DE DISPONIBILITÉ (Avec nettoyage XML)
+      // FORÇAGE DE LA DATE DE DISPONIBILITÉ
       // ========================================================================
       if (productId && formattedDate) {
         logCallback('info', `Mise à jour de la date de disponibilité vers ${formattedDate}...`);
@@ -222,7 +226,6 @@ export const processProductImport = async (data, logCallback) => {
           if (productToUpdate && productToUpdate.prestashop && productToUpdate.prestashop.product) {
             productToUpdate.prestashop.product.available_date = formattedDate;
 
-            // NETTOYAGE VITAL : Suppression des nœuds non modifiables générant l'erreur XML 127
             delete productToUpdate.prestashop.product.manufacturer_name;
             delete productToUpdate.prestashop.product.quantity;
             delete productToUpdate.prestashop.product.id_default_image;

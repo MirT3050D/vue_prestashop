@@ -37,30 +37,27 @@ export const rollbackOrders = async (logCallback) => {
 
 /**
  * Parse la chaîne de caractères complexe du CSV représentant les achats.
- * Exemple : "[(T_01;3;ngoza)]" ou "[(T_01;2;kely),(C_03;1;)]"
+ * Gère correctement les guillemets et les valeurs vides.
  */
 function parseAchat(achatString) {
     if (!achatString || achatString.indexOf('[') === -1 || achatString.indexOf(']') === -1) {
         return [];
     }
-    // Extraction du contenu entre les crochets []
+
     const start = achatString.indexOf('[');
     const end = achatString.lastIndexOf(']');
     const content = achatString.slice(start + 1, end);
 
-    // Découpage des différents tuples entre parenthèses ( )
     const tuples = content.match(/\(.*?\)/g);
-    if (!tuples) {
-        return [];
-    }
+    if (!tuples) return [];
 
     const items = [];
     for (let i = 0; i < tuples.length; i++) {
         const tuple = tuples[i];
-        const cleanTuple = tuple.slice(1, -1); // Enlever les parenthèses ( et )
+        const cleanTuple = tuple.slice(1, -1);
         const parts = cleanTuple.split(';');
 
-        // Nettoyage des guillemets résiduels de l'encapsulation CSV
+        // Nettoyage radical des doubles guillemets d'encapsulation CSV
         const ref = parts[0] ? parts[0].replace(/["']/g, '').trim() : '';
         const qty = parts[1] ? parseInt(parts[1].trim(), 10) || 1 : 1;
         const variant = parts[2] ? parts[2].replace(/["']/g, '').trim() : '';
@@ -72,9 +69,6 @@ function parseAchat(achatString) {
     return items;
 }
 
-/**
- * Extrait textuellement l'ID d'un nœud renvoyé par l'API PrestaShop.
- */
 function extractId(node) {
     if (!node) return null;
     if (typeof node === 'object') {
@@ -87,23 +81,18 @@ function extractId(node) {
 // FONCTION PRINCIPALE : IMPORTATION DES COMMANDES ET PANIERS
 // ============================================================================
 export const processOrderImport = async (data, logCallback) => {
+
+    // ========================================================================
+    // SÉCURITÉ 1 : VÉRIFICATION GLOBALE DES COLONNES CONFORMES
+    // ========================================================================
     if (!data || data.length === 0) {
         logCallback('warn', 'Le fichier CSV des commandes est vide.');
         return;
     }
 
-    // ========================================================================
-    // SÉCURITÉ 1 : VÉRIFICATION GLOBALE DES COLONNES CONFORMES
-    // ========================================================================
     const expectedColumns = ['date', 'nom', 'email', 'pwd', 'adresse', 'achat', 'etat'];
     const actualColumns = Object.keys(data[0]);
-    const missingColumns = [];
-
-    for (let c = 0; c < expectedColumns.length; c++) {
-        if (actualColumns.indexOf(expectedColumns[c]) === -1) {
-            missingColumns.push(expectedColumns[c]);
-        }
-    }
+    const missingColumns = expectedColumns.filter(col => !actualColumns.includes(col));
 
     if (missingColumns.length > 0) {
         logCallback('error', `CRITIQUE : Colonnes manquantes dans le CSV : ${missingColumns.join(', ')}`);
@@ -112,12 +101,11 @@ export const processOrderImport = async (data, logCallback) => {
     }
 
     try {
-        // Chargement des états de commande disponibles sur PrestaShop pour le mapping
         const statesResp = await getXml('/order_states?display=full');
         const allStates = statesResp?.prestashop?.order_states?.order_state || [];
         const stateList = Array.isArray(allStates) ? allStates : [allStates];
 
-        logCallback('info', `${stateList.length} états de commande chargés pour vérification.`);
+        logCallback('info', `${stateList.length} états de commande chargés pour mapping.`);
 
         for (const [index, row] of data.entries()) {
             logCallback('info', `Traitement de la ligne ${index + 1} (Client : ${row.nom || 'Inconnu'})...`);
@@ -125,13 +113,27 @@ export const processOrderImport = async (data, logCallback) => {
             // ========================================================================
             // SÉCURITÉ 2 : CONTRÔLE DES DONNÉES OBLIGATOIRES
             // ========================================================================
-            if (!row.email || !row.nom || !row.adresse || !row.achat) {
-                logCallback('error', `Ligne ${index + 1} ignorée : Des données essentielles (email, nom, adresse, achat) manquent.`);
+            if (!row.email || String(row.email).trim() === '' ||
+                !row.nom || String(row.nom).trim() === '' ||
+                !row.adresse || String(row.adresse).trim() === '' ||
+                !row.achat || String(row.achat).trim() === '' ||
+                !row.date || String(row.date).trim() === '') {
+                logCallback('error', `Ligne ${index + 1} ignorée : Des données vitales sont manquantes (email, nom, adresse, date ou achat).`);
                 continue;
             }
 
             // ========================================================================
-            // SÉCURITÉ 3 : VALIDATION STRICTE DU FORMAT DE DATE (DD/MM/YYYY)
+            // SÉCURITÉ 3 : VALIDATION DU FORMAT DE L'EMAIL
+            // ========================================================================
+            const email = String(row.email).trim();
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                logCallback('error', `Ligne ${index + 1} ignorée : L'adresse email fournie (${email}) n'est pas valide.`);
+                continue;
+            }
+
+            // ========================================================================
+            // SÉCURITÉ 4 : VALIDATION STRICTE DU FORMAT DE DATE (DD/MM/YYYY)
             // ========================================================================
             const rawDate = String(row.date).trim();
             const dateRegex = /^\d{2}\/\d{2}\/\d{4}$/;
@@ -141,31 +143,36 @@ export const processOrderImport = async (data, logCallback) => {
                 continue;
             }
 
-            // Extraction et conversion de la date pour l'injection PrestaShop (AAAA-MM-JJ)
             const dateParts = rawDate.split('/');
-            const day = dateParts[0].padStart(2, '0');
-            const month = dateParts[1].padStart(2, '0');
-            const year = dateParts[2];
-            const formattedDate = `${year}-${month}-${day}`;
+            const formattedDate = `${dateParts[2]}-${dateParts[1].padStart(2, '0')}-${dateParts[0].padStart(2, '0')}`;
+
+            // ========================================================================
+            // SÉCURITÉ 5 : EXTRACTION ET VÉRIFICATION DU PANIER
+            // ========================================================================
+            const purchasedItems = parseAchat(row.achat);
+            if (purchasedItems.length === 0) {
+                logCallback('error', `Ligne ${index + 1} ignorée : Impossible de décoder la syntaxe de la colonne achat.`);
+                continue;
+            }
 
             // ========================================================================
             // RÉSOLUTION OU CRÉATION DU CLIENT
             // ========================================================================
             let customerId = null;
-            const customerSearch = await getXml(`/customers?filter[email]=[${row.email.trim()}]&display=[id]`);
+            const customerSearch = await getXml(`/customers?filter[email]=[${email}]&display=[id]`);
             let customer = customerSearch?.prestashop?.customers?.customer;
 
             if (customer) {
                 if (Array.isArray(customer)) customer = customer[0];
                 customerId = extractId(customer.id);
             } else {
-                logCallback('info', `Création du client ${row.nom} (${row.email})...`);
+                logCallback('info', `Création du client ${row.nom} (${email})...`);
                 const customerPayload = {
                     prestashop: {
                         customer: {
                             firstname: row.nom,
                             lastname: row.nom,
-                            email: row.email.trim(),
+                            email: email,
                             passwd: row.pwd || 'DefaultPassword123!',
                             active: 1
                         }
@@ -194,9 +201,9 @@ export const processOrderImport = async (data, logCallback) => {
                             lastname: row.nom,
                             firstname: row.nom,
                             address1: row.adresse.trim(),
-                            postcode: '101', // Code postal standard Madagascar
+                            postcode: '101',
                             city: 'Antananarivo',
-                            id_country: 1, // Madagascar
+                            id_country: 1,
                             phone: '0340000000'
                         }
                     }
@@ -206,34 +213,28 @@ export const processOrderImport = async (data, logCallback) => {
             }
 
             // ========================================================================
-            // ANALYSE ET ENRICHISSEMENT DES PRODUITS DE L'ACHAT
+            // ANALYSE DES PRODUITS ET CONTRÔLE D'EXISTENCE
             // ========================================================================
-            const purchasedItems = parseAchat(row.achat);
-            if (purchasedItems.length === 0) {
-                logCallback('error', `Ligne ${index + 1} ignorée : Aucun produit valide n'a pu être extrait de la colonne achat.`);
-                continue;
-            }
-
             let cartRowsXml = '';
             let productCheckFailed = false;
 
             for (let i = 0; i < purchasedItems.length; i++) {
                 const item = purchasedItems[i];
 
-                // Recherche de l'ID du produit de base via sa référence
                 const prodSearch = await getXml(`/products?filter[reference]=[${item.reference}]&display=[id]`);
                 let foundProd = prodSearch?.prestashop?.products?.product;
+
                 if (!foundProd) {
-                    logCallback('error', `Ligne ${index + 1} stoppée : Référence produit "${item.reference}" introuvable.`);
+                    logCallback('error', `Ligne ${index + 1} stoppée : La référence "${item.reference}" n'existe pas en boutique.`);
                     productCheckFailed = true;
                     break;
                 }
+
                 if (Array.isArray(foundProd)) foundProd = foundProd[0];
                 const idProduct = extractId(foundProd.id);
 
-                // Recherche optionnelle de la déclinaison si une variante est définie
                 let idProductAttribute = '0';
-                if (item.variant) {
+                if (item.variant && item.variant !== '') {
                     const combSearch = await getXml(`/combinations?filter[id_product]=[${idProduct}]&filter[reference]=%${item.variant}%&display=[id]`);
                     let foundComb = combSearch?.prestashop?.combinations?.combination;
                     if (foundComb) {
@@ -252,12 +253,10 @@ export const processOrderImport = async (data, logCallback) => {
                 </cart_row>`;
             }
 
-            if (productCheckFailed) {
-                continue; // Saute cette ligne si un produit n'existe pas en base
-            }
+            if (productCheckFailed) continue;
 
             // ========================================================================
-            // ÉTAPE C : CRÉATION DU PANIER EN XML BRUT STRICT
+            // CRÉATION DU PANIER 
             // ========================================================================
             const cartXmlPayload = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
@@ -265,7 +264,7 @@ export const processOrderImport = async (data, logCallback) => {
         <id_address_delivery>${addressId}</id_address_delivery>
         <id_address_invoice>${addressId}</id_address_invoice>
         <id_currency>1</id_currency>
-        <id_customer>${customerId}</customerId>
+        <id_customer>${customerId}</id_customer>
         <id_lang>1</id_lang>
         <id_shop_group>1</id_shop_group>
         <id_shop>1</id_shop>
@@ -282,18 +281,17 @@ ${cartRowsXml}
             const cartId = extractId(newCartResp?.prestashop?.cart?.id);
 
             if (!cartId) {
-                logCallback('error', `Échec critique de création du panier à la ligne ${index + 1}.`);
+                logCallback('error', `Échec critique de la création du panier à la ligne ${index + 1}.`);
                 continue;
             }
 
             // ========================================================================
-            // ÉTAPE D : LA RÈGLE D'OR (VÉRIFICATION DE L'ÉTAT DU COMPTE)
+            // LA RÈGLE D'OR (PANIERS ABANDONNÉS)
             // ========================================================================
             const etatBrut = row.etat ? String(row.etat).trim().toLowerCase() : '';
 
-            // Si l'état est vide, null ou absent -> Le panier reste intact (Panier abandonné historique)
             if (etatBrut === '' || etatBrut === 'null') {
-                logCallback('info', `État vide détecté. Fixation de la date historique pour le Panier #${cartId}...`);
+                logCallback('info', `État vide détecté. Sauvegarde du Panier Abandonné #${cartId}...`);
 
                 const updateCartDatePayload = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
@@ -318,18 +316,19 @@ ${cartRowsXml}
 </prestashop>`;
 
                 await putXml(`/carts/${cartId}`, updateCartDatePayload);
-                logCallback('success', `Ligne ${index + 1} importée : Le panier #${cartId} est conservé avec succès (Aucune commande créée).`);
-                continue; // Règle respectée : arrêt du traitement et passage à la ligne suivante
+                logCallback('success', `Ligne ${index + 1} importée : Panier #${cartId} conservé (Aucune commande créée).`);
+                continue;
             }
 
             // ========================================================================
-            // ÉTAPE E : CRÉATION DE LA COMMANDE (Si un état valide est fourni)
+            // CRÉATION DE LA COMMANDE
             // ========================================================================
-            let orderStateId = '2'; // Statut par défaut (Paiement accepté)
+            let orderStateId = '2'; // Paiement accepté par défaut
 
             for (let s = 0; s < stateList.length; s++) {
                 const stateNode = stateList[s].name?.language;
                 let textName = '';
+
                 if (Array.isArray(stateNode)) {
                     textName = stateNode[0]['#text'] || '';
                 } else if (stateNode) {
@@ -342,7 +341,6 @@ ${cartRowsXml}
                 }
             }
 
-            // Construction du XML pour la commande finale
             const orderXmlPayload = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
     <order>
@@ -368,8 +366,8 @@ ${cartRowsXml}
             const orderId = extractId(newOrderResp?.prestashop?.order?.id);
 
             if (orderId) {
-                // Forçage de la date historique de la commande créée
                 logCallback('info', `Mise à jour de la date historique de la commande #${orderId}...`);
+
                 const updateOrderDatePayload = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
     <order>
@@ -390,7 +388,7 @@ ${cartRowsXml}
 </prestashop>`;
                 await putXml(`/orders/${orderId}`, updateOrderDatePayload);
 
-                // Nettoyage standard du panier de commande pour libérer l'espace front-office du client
+                // Nettoyage visuel du panier
                 const cleanCartPayload = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
     <cart>
@@ -411,7 +409,7 @@ ${cartRowsXml}
             }
         }
 
-        logCallback('success', 'Importation globale des commandes et paniers terminée avec succès !');
+        logCallback('success', 'Importation des commandes et paniers terminée avec succès !');
     } catch (error) {
         logCallback('error', `CRITIQUE : Échec de l'importation des commandes : ${error.message}`);
         logCallback('error', 'Lancement automatique de la procédure de Rollback...');
