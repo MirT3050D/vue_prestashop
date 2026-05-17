@@ -142,5 +142,13 @@ export const resetTargets = [
     itemKey: 'supplier',
     defaultSelected: false,
     skipIds: []
+  },
+  {
+    key: 'stock_movements',
+    label: 'Mouvements de stock',
+    endpoint: '/stock_movements',
+    collectionKey: 'stock_mvts', // Attention ici : c'est bien stock_mvts avec un "s" (le fameux piège !)
+    itemKey: 'stock_mvt',
+    skipIds: []
   }
 ];

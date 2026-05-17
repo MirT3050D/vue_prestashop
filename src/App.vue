@@ -75,6 +75,10 @@ onBeforeUnmount(() => {
             <Icon icon="lucide:package" />
             Stocks
           </RouterLink>
+          <RouterLink to="/admin/stock-evolution" class="nav-item" active-class="active">
+            <Icon icon="lucide:history" />
+            Évolution Stocks
+          </RouterLink>
           <RouterLink to="/admin/import" class="nav-item" active-class="active">
             <Icon icon="lucide:import" />
             Import

@@ -14,6 +14,7 @@ import OrdersView from '@/view/frontoffice/OrdersView.vue'
 
 import UserSelectionView from '../view/frontoffice/UserSelectionView.vue'
 import StockView from '@/view/backoffice/StockView.vue';
+import StockEvolution from '@/view/backoffice/StockEvolution.vue';
 
 const router = createRouter({
   history: createWebHistory(),
@@ -93,6 +94,12 @@ const router = createRouter({
       path: '/admin/stocks',
       name: 'stock-management',
       component: StockView,
+      meta: { requiresAuth: true, isBackoffice: true }
+    },
+    {
+      path: '/admin/stock-evolution/:id?',
+      name: 'stock-evolution',
+      component: StockEvolution,
       meta: { requiresAuth: true, isBackoffice: true }
     },
   ]
