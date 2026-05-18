@@ -173,14 +173,14 @@ export const processProductImport = async (data, logCallback) => {
       let formattedDate = null;
 
       if (rawDate && rawDate.trim() !== '') {
-        const dateRegex = /^\d{2}\/\d{2}\/\d{4}$/;
+        const trimmedDate = rawDate.trim();
+        const dateRegexDmy = /^\d{2}\/\d{2}\/\d{4}$/;
 
-        if (!dateRegex.test(rawDate.trim())) {
-          logCallback('error', `Ligne ${index + 1} ignorée : La date ("${rawDate}") ne respecte pas le format strict DD/MM/YYYY.`);
-          continue;
+        if (!dateRegexDmy.test(trimmedDate)) {
+          throw new Error(`La date ("${rawDate}") ne respecte pas le format strict DD/MM/YYYY.`);
         }
 
-        const parts = rawDate.trim().split('/');
+        const parts = trimmedDate.split('/');
         formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
       } else {
         logCallback('warn', `Ligne ${index + 1} : Aucune date renseignée. La date sera vide par défaut.`);

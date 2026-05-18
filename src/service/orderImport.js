@@ -314,10 +314,19 @@ export const processOrderImport = async (data, logCallback) => {
                 orderRowsXml += `<order_row><product_id><![CDATA[${pId}]]></product_id><product_attribute_id><![CDATA[${attributeId}]]></product_attribute_id><product_quantity><![CDATA[${achat.quantite}]]></product_quantity><product_name><![CDATA[${prodName}]]></product_name><product_reference><![CDATA[${achat.reference}]]></product_reference><product_price><![CDATA[${basePriceHt.toFixed(6)}]]></product_price><unit_price_tax_incl><![CDATA[${basePriceTtc.toFixed(6)}]]></unit_price_tax_incl><unit_price_tax_excl><![CDATA[${basePriceHt.toFixed(6)}]]></unit_price_tax_excl></order_row>`;
             }
 
-            let formattedDate = new Date().toISOString().slice(0, 10);
-            if (dateRaw) {
-                const parts = dateRaw.split('/');
-                if (parts.length === 3) formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+            let formattedDate = null;
+            if (dateRaw && dateRaw.trim() !== '') {
+                const trimmedDate = dateRaw.trim();
+                const dateRegexDmy = /^\d{2}\/\d{2}\/\d{4}$/;
+
+                if (!dateRegexDmy.test(trimmedDate)) {
+                    throw new Error(`La date ("${dateRaw}") ne respecte pas le format strict DD/MM/YYYY.`);
+                }
+
+                const parts = trimmedDate.split('/');
+                formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+            } else {
+                formattedDate = new Date().toISOString().slice(0, 10);
             }
 
             if (!cartRowsXml) { logCallback('warn', `Panier vide pour la ligne ${index + 1}, ignorée.`); continue; }
