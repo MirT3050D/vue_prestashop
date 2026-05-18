@@ -112,18 +112,18 @@ async function logOrderMovement(pId, attributeId, quantity, orderId, employeeId,
             const existingItems = existingList?.prestashop?.stock_movements?.stock_mvt || existingList?.prestashop?.stock_mvts?.stock_mvt || existingList?.prestashop?.stock_mvt;
             const existingArray = Array.isArray(existingItems) ? existingItems : (existingItems ? [existingItems] : []);
             if (logCallback) logCallback('debug', `Found ${existingArray.length} existing stock movement(s) for order ${orderId} product ${pId}`);
-            
+
             const duplicate = existingArray.find(m => {
                 const mStockId = String(m.id_stock?.['#text'] ?? m.id_stock ?? '');
                 const mOrderId = String(m.id_order?.['#text'] ?? m.id_order ?? '');
                 const mSupplyOrderId = String(m.id_supply_order?.['#text'] ?? m.id_supply_order ?? '0');
-                
+
                 const matchesStock = mStockId === String(stockAvailableId);
                 const matchesLegacy = (mStockId === '0' || mStockId === '') && mOrderId === String(pId) && mSupplyOrderId === String(attrFilter);
-                
+
                 const sign = String(m.sign?.['#text'] ?? m.sign ?? '');
                 const qty = Number(m.physical_quantity?.['#text'] ?? m.physical_quantity ?? 0);
-                
+
                 return (matchesStock || matchesLegacy) && sign === '-1' && qty === Number(quantity);
             });
 
@@ -161,6 +161,25 @@ async function logOrderMovement(pId, attributeId, quantity, orderId, employeeId,
         `;
         const resp = await postXml('/stock_movements', `<?xml version="1.0" encoding="UTF-8"?>\n<prestashop><stock_mvt>${baseXml}</stock_mvt></prestashop>`);
         const createdId = extractId(resp?.prestashop?.stock_mvt?.id);
+
+        if (createdId && customDate) {
+            if (logCallback) logCallback('debug', `Updating date_add for stock movement ${createdId} to ${dateAdd}`);
+            const putPayload = `<?xml version="1.0" encoding="UTF-8"?>
+            <prestashop>
+                <stock_mvt>
+                    <id>${createdId}</id>
+                    <id_employee><![CDATA[${employeeId}]]></id_employee>
+                    <id_stock><![CDATA[${stockAvailableId}]]></id_stock>
+                    <physical_quantity><![CDATA[${quantity}]]></physical_quantity>
+                    <id_stock_mvt_reason><![CDATA[${reasonId}]]></id_stock_mvt_reason>
+                    <sign><![CDATA[-1]]></sign>
+                    <price_te><![CDATA[0.000000]]></price_te>
+                    <date_add><![CDATA[${dateAdd}]]></date_add>
+                </stock_mvt>
+            </prestashop>`;
+            await putXml(`/stock_movements/${createdId}`, putPayload);
+        }
+
         if (logCallback) logCallback('success', `📦 Mouvement tracé dans l'historique pour le produit ${pId} (-${quantity}). id:${createdId || 'unknown'}`);
     } catch (e) {
         if (logCallback) logCallback('warn', `⚠️ Impossible de tracer le mouvement : ${formatApiError(e)}`);
@@ -187,6 +206,7 @@ async function forceOrderState(orderId, stateId, logCallback, options = {}) {
         <order_history>
             <id_order><![CDATA[${orderId}]]></id_order>
             <id_order_state><![CDATA[${stateId}]]></id_order_state>
+            ${date ? `<date_add><![CDATA[${date} 12:00:00]]></date_add>` : ''}
         </order_history>
     </prestashop>`;
 
@@ -312,6 +332,17 @@ export const processOrderImport = async (data, logCallback) => {
 
             if (orderId) {
                 if (logCallback) logCallback('debug', `Order created: id=${orderId} ref=${orderRef} cart=${cartId} state=${orderStateId}`);
+
+                // Mettre à jour la date de la commande à la date historique du CSV via un PUT Webservice standard (zéro modif PHP requis)
+                try {
+                    if (logCallback) logCallback('debug', `Updating order date for order ${orderId} to ${formattedDate}`);
+                    const putPayload = `<?xml version="1.0" encoding="UTF-8"?><prestashop><order><id>${orderId}</id><id_address_delivery><![CDATA[${addressId}]]></id_address_delivery><id_address_invoice><![CDATA[${addressId}]]></id_address_invoice><id_cart><![CDATA[${cartId}]]></id_cart><id_currency><![CDATA[1]]></id_currency><id_lang><![CDATA[1]]></id_lang><id_customer><![CDATA[${customerId}]]></id_customer><id_carrier><![CDATA[1]]></id_carrier><id_shop_group><![CDATA[1]]></id_shop_group><id_shop><![CDATA[1]]></id_shop><current_state><![CDATA[${orderStateId}]]></current_state><reference><![CDATA[${orderRef}]]></reference><module><![CDATA[ps_wirepayment]]></module><payment><![CDATA[Paiement importé]]></payment><total_paid><![CDATA[${cartTotal.toFixed(6)}]]></total_paid><total_paid_real><![CDATA[${cartTotal.toFixed(6)}]]></total_paid_real><total_products><![CDATA[${cartTotal.toFixed(6)}]]></total_products><total_products_wt><![CDATA[${cartTotal.toFixed(6)}]]></total_products_wt><total_shipping><![CDATA[0.000000]]></total_shipping><total_shipping_tax_incl><![CDATA[0.000000]]></total_shipping_tax_incl><total_shipping_tax_excl><![CDATA[0.000000]]></total_shipping_tax_excl><total_discounts><![CDATA[0.000000]]></total_discounts><total_wrapping><![CDATA[0.000000]]></total_wrapping><conversion_rate><![CDATA[1.000000]]></conversion_rate><date_add><![CDATA[${formattedDate} 12:00:00]]></date_add><date_upd><![CDATA[${formattedDate} 12:00:00]]></date_upd></order></prestashop>`;
+                    await putXml(`/orders/${orderId}`, putPayload);
+                    if (logCallback) logCallback('info', `📅 Date de la commande #${orderId} mise à jour avec succès vers ${formattedDate}.`);
+                } catch (dateErr) {
+                    if (logCallback) logCallback('warn', `⚠️ Impossible de mettre à jour la date historique de la commande #${orderId}: ${formatApiError(dateErr)}`);
+                }
+
                 if (logCallback) logCallback('debug', `Forcing state ${orderStateId} for order ${orderId}`);
                 await forceOrderState(orderId, orderStateId, logCallback, {
                     employeeId,
