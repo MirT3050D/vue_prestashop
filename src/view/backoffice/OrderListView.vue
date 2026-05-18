@@ -45,7 +45,7 @@
               </td>
               <td>
                 <select v-if="!order.isCart" @change="onStatusChange(order.id, $event.target.value)" class="status-select"
-                  :disabled="isUpdating[order.id] || isDeliveredState(order.current_state)">
+                  :disabled="isUpdating[order.id] || isDeliveredState(order.current_state) || isCanceledState(order.current_state)">
                   <option disabled selected>-- Changer --</option>
                   <option v-for="state in targetStates" :key="normalizeId(state.id)" :value="normalizeId(state.id)">
                     {{ getStatusName(state.id) }}
@@ -92,11 +92,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, reactive, onMounted } from 'vue';
 import { getOrders, getOrderStates, updateOrderStatus } from '@/service/orderService';
 import { getCarts } from '@/service/cartService';
-import { getStockAvailables, updateStockAvailable } from '@/service/stockService';
-import { postXml } from '@/service/api';
 import Loading from '@/components/Loading.vue';
 import Dropdown from '@/components/Dropdown.vue';
 
@@ -107,9 +105,9 @@ const isLoading = ref(true);
 const isUpdating = ref({});
 const error = ref(null);
 
-const stateNameMapping = ref(new Map());
-const stateColorMapping = ref(new Map());
-const stateIdByNameLower = ref(new Map());
+const stateNameMapping = reactive(new Map());
+const stateColorMapping = reactive(new Map());
+const stateIdByNameLower = reactive(new Map());
 
 function normalizeId(id) {
   if (id && typeof id === 'object') return String(id['#text'] ?? id);
@@ -127,56 +125,15 @@ function toNumber(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function buildStockMovementXml(productId, attributeId, delta, orderId) {
-  const sign = delta > 0 ? 1 : -1;
-  const physicalQuantity = Math.abs(delta);
-  const dateAdd = new Date().toISOString().slice(0, 19).replace('T', ' ');
-  const reasonId = delta > 0 ? 11 : 12;
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<prestashop>
-  <stock_mvt>
-    <id_product><![CDATA[${productId}]]></id_product>
-    <id_product_attribute><![CDATA[${attributeId}]]></id_product_attribute>
-    <id_employee><![CDATA[1]]></id_employee>
-    <id_stock><![CDATA[0]]></id_stock>
-    <id_stock_mvt_reason><![CDATA[${reasonId}]]></id_stock_mvt_reason>
-    <physical_quantity><![CDATA[${physicalQuantity}]]></physical_quantity>
-    <sign><![CDATA[${sign}]]></sign>
-    <price_te><![CDATA[0.000000]]></price_te>
-    <date_add><![CDATA[${dateAdd}]]></date_add>
-  </stock_mvt>
-</prestashop>`;
-}
 
 function getOrderRows(order) {
   const rows = order?.associations?.order_rows?.order_row || [];
   return Array.isArray(rows) ? rows : [rows];
 }
 
-function buildStockAvailablePayload(stock, newQty) {
-  const id = normalizeId(stock.id);
-  const locationValue = stock.location?.['#text'] ?? stock.location;
-  const payload = {
-    id,
-    id_product: normalizeId(stock.id_product),
-    id_product_attribute: normalizeId(stock.id_product_attribute || '0'),
-    id_shop: normalizeId(stock.id_shop || '1'),
-    id_shop_group: normalizeId(stock.id_shop_group || '0'),
-    quantity: String(newQty),
-    depends_on_stock: normalizeId(stock.depends_on_stock ?? '0'),
-    out_of_stock: normalizeId(stock.out_of_stock ?? '2')
-  };
-
-  if (locationValue != null && String(locationValue).trim() !== '') {
-    payload.location = String(locationValue);
-  }
-
-  return { prestashop: { stock_available: payload } };
-}
 
 function getStateIdByNameLower(nameLower) {
-  return stateIdByNameLower.value.get(nameLower) || '';
+  return stateIdByNameLower.get(nameLower) || '';
 }
 
 function isDeliveredState(stateId) {
@@ -184,9 +141,9 @@ function isDeliveredState(stateId) {
   return deliveredId && normalizeId(stateId) === deliveredId;
 }
 
-function isPaidState(stateId) {
-  const paidId = getStateIdByNameLower('paiement accepté');
-  return paidId && normalizeId(stateId) === paidId;
+function isCanceledState(stateId) {
+  const canceledId = getStateIdByNameLower('annulé');
+  return canceledId && normalizeId(stateId) === canceledId;
 }
 
 // States we want to be able to switch to
@@ -240,9 +197,9 @@ async function fetchData() {
       }
       const stateName = stateText.toLowerCase();
       const idKey = normalizeId(state.id);
-      stateNameMapping.value.set(idKey, stateText);
-      stateColorMapping.value.set(idKey, state.color);
-      stateIdByNameLower.value.set(stateName, idKey);
+      stateNameMapping.set(idKey, stateText);
+      stateColorMapping.set(idKey, state.color);
+      stateIdByNameLower.set(stateName, idKey);
 
       if (TARGET_STATE_NAMES.includes(stateName)) {
         targetStates.value.push(state);
@@ -250,8 +207,8 @@ async function fetchData() {
       console.log('state parsed:', { id: state.id, idKey, name: stateText, nameLower: stateName, color: state.color });
     });
 
-    console.log('stateNameMapping entries:', Array.from(stateNameMapping.value.entries()));
-    console.log('stateColorMapping entries:', Array.from(stateColorMapping.value.entries()));
+    console.log('stateNameMapping entries:', Array.from(stateNameMapping.entries()));
+    console.log('stateColorMapping entries:', Array.from(stateColorMapping.entries()));
     console.log('targetStates:', targetStates.value);
 
   } catch (e) {
@@ -264,13 +221,13 @@ async function fetchData() {
 function getStatusName(stateId) {
   if (stateId === 'dans_le_panier') return 'Dans le panier';
   const idKey = normalizeId(stateId);
-  return stateNameMapping.value.get(idKey) || 'Inconnu';
+  return stateNameMapping.get(idKey) || 'Inconnu';
 }
 
 function getStatusColor(stateId) {
-  if (stateId === 'dans_le_panier') return '#94a3b8'; // Gris ardoise pour les paniers
+  if (stateId === 'dans_le_panier') return '#94a3b8';
   const idKey = normalizeId(stateId);
-  const color = stateColorMapping.value.get(idKey);
+  const color = stateColorMapping.get(idKey);
   return color || '#cccccc';
 }
 
@@ -288,6 +245,11 @@ async function onStatusChange(orderId, newStateId) {
     alert('Cette commande est déjà livrée. Changement impossible.');
     return;
   }
+  // if (canceledId && normalizeId(orderToUpdate.current_state) === canceledId && normalizeId(newStateId) !== canceledId) {
+  //   alert('Cette commande est déjà annulé. Changement impossible.');
+  //   return;
+  // }
+
 
   if (canceledId && normalizeId(newStateId) === canceledId) {
     if (!paidId || normalizeId(orderToUpdate.current_state) !== paidId) {
@@ -298,53 +260,26 @@ async function onStatusChange(orderId, newStateId) {
 
   isUpdating.value[orderId] = true;
   try {
+    console.log('[OrderStatus] update start', {
+      orderId,
+      newStateId,
+      currentState: orderToUpdate.current_state,
+      deliveredId,
+      canceledId,
+      paidId
+    });
     await updateOrderStatus(orderId, newStateId);
     // Refresh the specific order's state locally for instant feedback
     if (orderToUpdate) {
       orderToUpdate.current_state = newStateId;
     }
 
-    if (deliveredId && normalizeId(newStateId) === deliveredId) {
-      await applyStockDelta(orderToUpdate, -1);
-    }
-
-    if (canceledId && normalizeId(newStateId) === canceledId) {
-      await applyStockDelta(orderToUpdate, 1);
-    }
+    console.log('[OrderStatus] update done', { orderId, newStateId });
   } catch (e) {
+    console.error('[OrderStatus] update failed', { orderId, newStateId, error: e });
     alert(`Erreur lors de la mise à jour de la commande ${orderId}: ${e.message}`);
   } finally {
     isUpdating.value[orderId] = false;
-  }
-}
-
-async function applyStockDelta(order, sign) {
-  if (!order) return;
-  const rows = getOrderRows(order);
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const productId = normalizeId(row.product_id);
-    const attributeId = normalizeId(row.product_attribute_id) || '0';
-    const qty = parseInt(normalizeId(row.product_quantity), 10) || 0;
-    if (!productId || qty <= 0) continue;
-
-    try {
-      const stockList = await getStockAvailables(`filter[id_product]=[${productId}]&filter[id_product_attribute]=[${attributeId}]&display=full`);
-      if (stockList && stockList.length > 0) {
-        const stockToUpdate = stockList[0];
-        const currentQty = parseInt(normalizeId(stockToUpdate.quantity), 10) || 0;
-        const delta = qty * sign;
-        const newQty = currentQty + delta;
-
-        const payload = buildStockAvailablePayload(stockToUpdate, newQty);
-        await updateStockAvailable(normalizeId(stockToUpdate.id), payload);
-
-        const movementXml = buildStockMovementXml(productId, attributeId, delta, order.id);
-        await postXml('/stock_movements', movementXml);
-      }
-    } catch (e) {
-      console.error('Erreur stock commande:', e);
-    }
   }
 }
 

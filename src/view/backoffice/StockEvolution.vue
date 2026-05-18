@@ -10,6 +10,7 @@ const loading = ref(false);
 const products = ref([]);
 const movements = ref([]);
 const combinations = ref([]);
+const stockAvailables = ref([]);
 
 // Filtres
 const selectedProductId = ref('all');
@@ -34,13 +35,28 @@ function getLangText(field) {
     return field.language['#text'];
 }
 
+function getMovementStockInfo(mvt) {
+    const stockId = safeValue(mvt.id_stock);
+    if (!stockId || stockId === '0') return null;
+    return stockAvailables.value.find(sa => String(safeValue(sa.id)) === String(stockId)) || null;
+}
+
+function isLegacyImportMovement(mvt) {
+    return safeValue(mvt.id_stock) === '0' && safeValue(mvt.id_stock_mvt_reason) === '11';
+}
+
 // ============================================================================
 // 2. DÉCODAGE DES NOMS ET DES DÉCLINAISONS
 // ============================================================================
 function getMovementProductName(mvt) {
     let pId = safeValue(mvt.id_product);
-    if (!pId || pId === '0') pId = safeValue(mvt.id_order);
-
+    if (!pId || pId === '0') {
+        const stockInfo = getMovementStockInfo(mvt);
+        pId = stockInfo ? safeValue(stockInfo.id_product) : '';
+    }
+    if ((!pId || pId === '0') && isLegacyImportMovement(mvt)) {
+        pId = safeValue(mvt.id_order);
+    }
     if (pId && pId !== '0') {
         const prod = products.value.find(p => String(p.id) === String(pId));
         if (prod) return getLangText(prod.name);
@@ -51,8 +67,13 @@ function getMovementProductName(mvt) {
 
 function getMovementVariantName(mvt) {
     let attrId = safeValue(mvt.id_product_attribute);
-    if (!attrId || attrId === '0') attrId = safeValue(mvt.id_supply_order);
-
+    if (!attrId || attrId === '0') {
+        const stockInfo = getMovementStockInfo(mvt);
+        attrId = stockInfo ? safeValue(stockInfo.id_product_attribute) : '';
+    }
+    if ((!attrId || attrId === '0') && isLegacyImportMovement(mvt)) {
+        attrId = safeValue(mvt.id_supply_order);
+    }
     if (!attrId || attrId === '0') return 'Produit simple';
 
     const comb = combinations.value.find(c => String(safeValue(c.id)) === String(attrId));
@@ -92,8 +113,13 @@ onMounted(async () => {
         const combsList = responseCombs?.prestashop?.combinations?.combination;
         combinations.value = Array.isArray(combsList) ? combsList : (combsList ? [combsList] : []);
 
-        const rawMvts = responseMvts?.prestashop?.stock_mvts?.stock_mvt;
+        const rawMvts = responseMvts?.prestashop?.stock_movements?.stock_movement
+            || responseMvts?.prestashop?.stock_mvts?.stock_mvt;
         let mvtsArray = Array.isArray(rawMvts) ? rawMvts : (rawMvts ? [rawMvts] : []);
+
+        const responseStockAvailables = await getXml('/stock_availables?display=full');
+        const rawStocks = responseStockAvailables?.prestashop?.stock_availables?.stock_available;
+        stockAvailables.value = Array.isArray(rawStocks) ? rawStocks : (rawStocks ? [rawStocks] : []);
 
         mvtsArray.sort((a, b) => {
             const dateA = new Date(safeValue(a.date_add)).getTime();
@@ -119,7 +145,13 @@ const filteredMovements = computed(() => {
     if (selectedProductId.value !== 'all') {
         result = result.filter(mvt => {
             let mvtId = safeValue(mvt.id_product);
-            if (!mvtId || mvtId === '0') mvtId = safeValue(mvt.id_order);
+            if (!mvtId || mvtId === '0') {
+                const stockInfo = getMovementStockInfo(mvt);
+                mvtId = stockInfo ? safeValue(stockInfo.id_product) : '';
+            }
+            if ((!mvtId || mvtId === '0') && isLegacyImportMovement(mvt)) {
+                mvtId = safeValue(mvt.id_order);
+            }
             return String(mvtId) === String(selectedProductId.value);
         });
     }

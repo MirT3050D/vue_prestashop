@@ -1,5 +1,6 @@
 import { getXml, postXml, putXml } from '@/service/api';
 import { runResetForTargets } from '@/service/resetService';
+import { resetTargets } from '@/service/resetTargets';
 import { getProductTaxRate } from '@/service/price';
 
 export const resetDeclinaisonTargets = [
@@ -206,6 +207,11 @@ export const processVariantImport = async (data, logCallback) => {
     logCallback('success', 'Import des variations terminé avec succès !');
   } catch (error) {
     logCallback('error', `Erreur lors de l'import des variations : ${formatApiError(error)}`);
-    await rollbackDeclinaison(logCallback);
+    // Rollback global pour annuler tous les imports (produits, déclinaisons, commandes, images, ...)
+    try {
+      await runResetForTargets(resetTargets, (type, message) => logCallback(type, `Rollback global: ${message}`));
+    } catch (e) {
+      logCallback('warn', `Échec du rollback global : ${e?.message ?? e}`);
+    }
   }
 };

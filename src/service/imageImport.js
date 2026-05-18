@@ -1,4 +1,6 @@
 import { getXml, postImage } from '@/service/api';
+import { runResetForTargets } from '@/service/resetService';
+import { resetTargets } from '@/service/resetTargets';
 import JSZip from 'jszip';
 
 /**
@@ -84,5 +86,11 @@ export const processImageImport = async (zipFile, logCallback) => {
 
     } catch (error) {
         logCallback('error', `Erreur lors de la lecture du fichier ZIP : ${error.message}`);
+        // Rollback global en cas d'erreur critique pendant l'import d'images
+        try {
+            await runResetForTargets(resetTargets, (type, message) => logCallback(type, `Rollback global: ${message}`));
+        } catch (e) {
+            logCallback('warn', `Échec du rollback global : ${e?.message ?? e}`);
+        }
     }
 };

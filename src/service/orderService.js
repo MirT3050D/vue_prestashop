@@ -77,7 +77,25 @@ export async function getOrderStates() {
  * @param {string} orderId The ID of the order to update.
  * @param {string} newStateId The target order state ID.
  */
-export async function updateOrderStatus(orderId, newStateId) {
+export async function updateOrderStatus(orderId, newStateId, options = {}) {
+    const stateId = String(newStateId);
+    const useCustomEndpoint = stateId === '5' || stateId === '6';
+
+    if (useCustomEndpoint) {
+        const { employeeId = 0, date = '' } = options;
+        const payload = `<?xml version="1.0" encoding="UTF-8"?>
+<prestashop>
+    <manual_order_state>
+        <id_order>${orderId}</id_order>
+        <id_order_state>${newStateId}</id_order_state>
+        <id_employee>${employeeId}</id_employee>
+        <date>${date}</date>
+    </manual_order_state>
+</prestashop>`;
+
+        return await postXml('/custom_order_state', payload);
+    }
+
     const payload = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
     <order_history>
