@@ -1,6 +1,7 @@
 import { getXml, postXml, putXml, deleteXml, getPrestaShopConfig } from '@/service/api';
 import { runResetForTargets } from '@/service/resetService';
 import { resetTargets } from '@/service/resetTargets';
+import { getProductTaxRate } from '@/service/price';
 
 export const resetOrderTargets = [
     { key: 'orders', label: 'Commandes', endpoint: '/orders', collectionKey: 'orders', itemKey: 'order', skipIds: [] },
@@ -273,7 +274,8 @@ export const processOrderImport = async (data, logCallback) => {
 
             let cartRowsXml = '';
             let orderRowsXml = '';
-            let cartTotal = 0;
+            let cartTotalHt = 0;
+            let cartTotalTtc = 0;
             const linesToDecrement = [];
 
             for (const achat of achats) {
@@ -297,12 +299,19 @@ export const processOrderImport = async (data, logCallback) => {
                     }
                 }
 
-                const lineTotal = basePriceHt * achat.quantite;
-                cartTotal += lineTotal;
+                const taxRate = await getProductTaxRate(pId);
+                const basePriceTtc = basePriceHt * (1 + taxRate / 100);
+
+                const lineTotalHt = basePriceHt * achat.quantite;
+                const lineTotalTtc = basePriceTtc * achat.quantite;
+
+                cartTotalHt += lineTotalHt;
+                cartTotalTtc += lineTotalTtc;
+
                 linesToDecrement.push({ pId, attributeId, quantity: achat.quantite });
 
                 cartRowsXml += `<cart_row><id_product><![CDATA[${pId}]]></id_product><id_product_attribute><![CDATA[${attributeId}]]></id_product_attribute><id_address_delivery><![CDATA[${addressId}]]></id_address_delivery><quantity><![CDATA[${achat.quantite}]]></quantity></cart_row>`;
-                orderRowsXml += `<order_row><product_id><![CDATA[${pId}]]></product_id><product_attribute_id><![CDATA[${attributeId}]]></product_attribute_id><product_quantity><![CDATA[${achat.quantite}]]></product_quantity><product_name><![CDATA[${prodName}]]></product_name><product_reference><![CDATA[${achat.reference}]]></product_reference><product_price><![CDATA[${basePriceHt.toFixed(6)}]]></product_price><unit_price_tax_incl><![CDATA[${basePriceHt.toFixed(6)}]]></unit_price_tax_incl><unit_price_tax_excl><![CDATA[${basePriceHt.toFixed(6)}]]></unit_price_tax_excl></order_row>`;
+                orderRowsXml += `<order_row><product_id><![CDATA[${pId}]]></product_id><product_attribute_id><![CDATA[${attributeId}]]></product_attribute_id><product_quantity><![CDATA[${achat.quantite}]]></product_quantity><product_name><![CDATA[${prodName}]]></product_name><product_reference><![CDATA[${achat.reference}]]></product_reference><product_price><![CDATA[${basePriceHt.toFixed(6)}]]></product_price><unit_price_tax_incl><![CDATA[${basePriceTtc.toFixed(6)}]]></unit_price_tax_incl><unit_price_tax_excl><![CDATA[${basePriceHt.toFixed(6)}]]></unit_price_tax_excl></order_row>`;
             }
 
             let formattedDate = new Date().toISOString().slice(0, 10);
@@ -325,7 +334,7 @@ export const processOrderImport = async (data, logCallback) => {
             }
             const orderRef = generateOrderReference();
 
-            const orderPayload = `<?xml version="1.0" encoding="UTF-8"?><prestashop><order><id_address_delivery><![CDATA[${addressId}]]></id_address_delivery><id_address_invoice><![CDATA[${addressId}]]></id_address_invoice><id_cart><![CDATA[${cartId}]]></id_cart><id_currency><![CDATA[1]]></id_currency><id_lang><![CDATA[1]]></id_lang><id_customer><![CDATA[${customerId}]]></id_customer><id_carrier><![CDATA[1]]></id_carrier><id_shop_group><![CDATA[1]]></id_shop_group><id_shop><![CDATA[1]]></id_shop><current_state><![CDATA[${orderStateId}]]></current_state><reference><![CDATA[${orderRef}]]></reference><module><![CDATA[ps_wirepayment]]></module><payment><![CDATA[Paiement importé]]></payment><total_paid><![CDATA[${cartTotal.toFixed(6)}]]></total_paid><total_paid_real><![CDATA[${cartTotal.toFixed(6)}]]></total_paid_real><total_products><![CDATA[${cartTotal.toFixed(6)}]]></total_products><total_products_wt><![CDATA[${cartTotal.toFixed(6)}]]></total_products_wt><total_shipping><![CDATA[0.000000]]></total_shipping><total_shipping_tax_incl><![CDATA[0.000000]]></total_shipping_tax_incl><total_shipping_tax_excl><![CDATA[0.000000]]></total_shipping_tax_excl><total_discounts><![CDATA[0.000000]]></total_discounts><total_wrapping><![CDATA[0.000000]]></total_wrapping><conversion_rate><![CDATA[1.000000]]></conversion_rate><date_add><![CDATA[${formattedDate} 12:00:00]]></date_add><date_upd><![CDATA[${formattedDate} 12:00:00]]></date_upd><associations><order_rows>${orderRowsXml}</order_rows></associations></order></prestashop>`;
+            const orderPayload = `<?xml version="1.0" encoding="UTF-8"?><prestashop><order><id_address_delivery><![CDATA[${addressId}]]></id_address_delivery><id_address_invoice><![CDATA[${addressId}]]></id_address_invoice><id_cart><![CDATA[${cartId}]]></id_cart><id_currency><![CDATA[1]]></id_currency><id_lang><![CDATA[1]]></id_lang><id_customer><![CDATA[${customerId}]]></id_customer><id_carrier><![CDATA[1]]></id_carrier><id_shop_group><![CDATA[1]]></id_shop_group><id_shop><![CDATA[1]]></id_shop><current_state><![CDATA[${orderStateId}]]></current_state><reference><![CDATA[${orderRef}]]></reference><module><![CDATA[ps_wirepayment]]></module><payment><![CDATA[Paiement importé]]></payment><total_paid><![CDATA[${cartTotalTtc.toFixed(6)}]]></total_paid><total_paid_tax_incl><![CDATA[${cartTotalTtc.toFixed(6)}]]></total_paid_tax_incl><total_paid_tax_excl><![CDATA[${cartTotalHt.toFixed(6)}]]></total_paid_tax_excl><total_paid_real><![CDATA[${cartTotalTtc.toFixed(6)}]]></total_paid_real><total_products><![CDATA[${cartTotalHt.toFixed(6)}]]></total_products><total_products_wt><![CDATA[${cartTotalTtc.toFixed(6)}]]></total_products_wt><total_shipping><![CDATA[0.000000]]></total_shipping><total_shipping_tax_incl><![CDATA[0.000000]]></total_shipping_tax_incl><total_shipping_tax_excl><![CDATA[0.000000]]></total_shipping_tax_excl><total_discounts><![CDATA[0.000000]]></total_discounts><total_wrapping><![CDATA[0.000000]]></total_wrapping><conversion_rate><![CDATA[1.000000]]></conversion_rate><date_add><![CDATA[${formattedDate} 12:00:00]]></date_add><date_upd><![CDATA[${formattedDate} 12:00:00]]></date_upd><associations><order_rows>${orderRowsXml}</order_rows></associations></order></prestashop>`;
 
             const newOrderResp = await postXml('/orders', orderPayload);
             const orderId = extractId(newOrderResp?.prestashop?.order?.id);
@@ -333,10 +342,10 @@ export const processOrderImport = async (data, logCallback) => {
             if (orderId) {
                 if (logCallback) logCallback('debug', `Order created: id=${orderId} ref=${orderRef} cart=${cartId} state=${orderStateId}`);
 
-                // Mettre à jour la date de la commande à la date historique du CSV via un PUT Webservice standard (zéro modif PHP requis)
+                // Mettre à jour la date de la commande à la date historique du CSV via un PUT Webservice standard
                 try {
                     if (logCallback) logCallback('debug', `Updating order date for order ${orderId} to ${formattedDate}`);
-                    const putPayload = `<?xml version="1.0" encoding="UTF-8"?><prestashop><order><id>${orderId}</id><id_address_delivery><![CDATA[${addressId}]]></id_address_delivery><id_address_invoice><![CDATA[${addressId}]]></id_address_invoice><id_cart><![CDATA[${cartId}]]></id_cart><id_currency><![CDATA[1]]></id_currency><id_lang><![CDATA[1]]></id_lang><id_customer><![CDATA[${customerId}]]></id_customer><id_carrier><![CDATA[1]]></id_carrier><id_shop_group><![CDATA[1]]></id_shop_group><id_shop><![CDATA[1]]></id_shop><current_state><![CDATA[${orderStateId}]]></current_state><reference><![CDATA[${orderRef}]]></reference><module><![CDATA[ps_wirepayment]]></module><payment><![CDATA[Paiement importé]]></payment><total_paid><![CDATA[${cartTotal.toFixed(6)}]]></total_paid><total_paid_real><![CDATA[${cartTotal.toFixed(6)}]]></total_paid_real><total_products><![CDATA[${cartTotal.toFixed(6)}]]></total_products><total_products_wt><![CDATA[${cartTotal.toFixed(6)}]]></total_products_wt><total_shipping><![CDATA[0.000000]]></total_shipping><total_shipping_tax_incl><![CDATA[0.000000]]></total_shipping_tax_incl><total_shipping_tax_excl><![CDATA[0.000000]]></total_shipping_tax_excl><total_discounts><![CDATA[0.000000]]></total_discounts><total_wrapping><![CDATA[0.000000]]></total_wrapping><conversion_rate><![CDATA[1.000000]]></conversion_rate><date_add><![CDATA[${formattedDate} 12:00:00]]></date_add><date_upd><![CDATA[${formattedDate} 12:00:00]]></date_upd></order></prestashop>`;
+                    const putPayload = `<?xml version="1.0" encoding="UTF-8"?><prestashop><order><id>${orderId}</id><id_address_delivery><![CDATA[${addressId}]]></id_address_delivery><id_address_invoice><![CDATA[${addressId}]]></id_address_invoice><id_cart><![CDATA[${cartId}]]></id_cart><id_currency><![CDATA[1]]></id_currency><id_lang><![CDATA[1]]></id_lang><id_customer><![CDATA[${customerId}]]></id_customer><id_carrier><![CDATA[1]]></id_carrier><id_shop_group><![CDATA[1]]></id_shop_group><id_shop><![CDATA[1]]></id_shop><current_state><![CDATA[${orderStateId}]]></current_state><reference><![CDATA[${orderRef}]]></reference><module><![CDATA[ps_wirepayment]]></module><payment><![CDATA[Paiement importé]]></payment><total_paid><![CDATA[${cartTotalTtc.toFixed(6)}]]></total_paid><total_paid_tax_incl><![CDATA[${cartTotalTtc.toFixed(6)}]]></total_paid_tax_incl><total_paid_tax_excl><![CDATA[${cartTotalHt.toFixed(6)}]]></total_paid_tax_excl><total_paid_real><![CDATA[${cartTotalTtc.toFixed(6)}]]></total_paid_real><total_products><![CDATA[${cartTotalHt.toFixed(6)}]]></total_products><total_products_wt><![CDATA[${cartTotalTtc.toFixed(6)}]]></total_products_wt><total_shipping><![CDATA[0.000000]]></total_shipping><total_shipping_tax_incl><![CDATA[0.000000]]></total_shipping_tax_incl><total_shipping_tax_excl><![CDATA[0.000000]]></total_shipping_tax_excl><total_discounts><![CDATA[0.000000]]></total_discounts><total_wrapping><![CDATA[0.000000]]></total_wrapping><conversion_rate><![CDATA[1.000000]]></conversion_rate><date_add><![CDATA[${formattedDate} 12:00:00]]></date_add><date_upd><![CDATA[${formattedDate} 12:00:00]]></date_upd><associations><order_rows>${orderRowsXml}</order_rows></associations></order></prestashop>`;
                     await putXml(`/orders/${orderId}`, putPayload);
                     if (logCallback) logCallback('info', `📅 Date de la commande #${orderId} mise à jour avec succès vers ${formattedDate}.`);
                 } catch (dateErr) {
