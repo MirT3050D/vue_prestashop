@@ -1,5 +1,6 @@
 import { getXml, postXml, putXml } from '@/service/api';
 import { runResetForTargets } from '@/service/resetService';
+import { getProductTaxRate } from '@/service/price';
 
 export const resetDeclinaisonTargets = [
   { key: 'combinations', label: 'Combinaisons (Déclinaisons)', endpoint: '/combinations', collectionKey: 'combinations', itemKey: 'combination', skipIds: [] },
@@ -161,7 +162,20 @@ export const processVariantImport = async (data, logCallback) => {
         optionValueCache[optValKey] = optionValueId;
       }
 
-      const priceImpact = prixVenteTTC > 0 ? prixVenteTTC - (parseFloat(parentProduct.price) || 0) : 0;
+      // Calcul du prix HT de la variante et de l'impact
+      let priceImpact = 0;
+      if (prixVenteTTC > 0) {
+        try {
+          const parentTaxRate = await getProductTaxRate(parentProductId);
+          // Convertir le TTC en HT : HT = TTC / (1 + taxRate / 100)
+          const prixVenteHT = prixVenteTTC / (1 + (parentTaxRate / 100));
+          const parentPriceHT = parseFloat(parentProduct.price) || 0;
+          priceImpact = prixVenteHT - parentPriceHT;
+        } catch (e) {
+          logCallback('warn', `Impossible de récupérer le taux de taxe pour la variante ${reference}_${karazany}, impact=0`);
+          priceImpact = 0;
+        }
+      }
       const newCombResp = await postXml('/combinations', { prestashop: { combination: { id_product: parentProductId, reference: `${reference}_${karazany}`, price: priceImpact.toFixed(6), minimal_quantity: 1, associations: { product_option_values: { product_option_value: [{ id: optionValueId }] } } } } });
       const combinationId = extractId(newCombResp?.prestashop?.combination?.id);
 

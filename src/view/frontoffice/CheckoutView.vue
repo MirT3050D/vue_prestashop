@@ -7,6 +7,7 @@ import { getProduct } from '@/service/productService';
 import { getCustomerAddresses, createAddress } from '@/service/addressService';
 import { createCart } from '@/service/cartService';
 import { createOrder, getOrderStates, updateOrderStatusByHistory, getOrder } from '@/service/orderService';
+import { getStockAvailables } from '@/service/stockService';
 import { useRouter } from 'vue-router';
 
 const router = useRouter();
@@ -16,7 +17,7 @@ const step = ref('form'); // 'form' | 'confirmation'
 const loading = ref(false);
 const error = ref('');
 const idOrder = ref(null);
-const codStateId = ref(10); // Default fallback for COD
+const codStateId = ref(2); // 2 = Paid / Paiement accepté
 
 const panier = ref([]);
 const customer = ref(null);
@@ -87,6 +88,35 @@ function extractText(value) {
 
 function normalizeFormText(value) {
     return extractText(value).trim();
+}
+
+async function getItemStock(item) {
+    const productId = extractText(item?.id_product);
+    const attributeId = extractText(item?.id_product_attribute) || '0';
+    if (!productId) return 0;
+
+    const stockData = await getStockAvailables(`filter[id_product]=[${productId}]&filter[id_product_attribute]=[${attributeId}]&display=[quantity]`);
+    if (stockData && stockData.length > 0) {
+        return parseInt(extractText(stockData[0].quantity), 10) || 0;
+    }
+
+    return 0;
+}
+
+async function validateCartStock() {
+    for (let i = 0; i < panier.value.length; i++) {
+        const item = panier.value[i];
+        const available = await getItemStock(item);
+        const requested = Number(item.quantity) || 0;
+
+        if (requested > available) {
+            const name = item.name || `Produit #${item.id_product}`;
+            error.value = `Stock insuffisant pour ${name}. Disponible: ${available}, dans le panier: ${requested}.`;
+            return false;
+        }
+    }
+
+    return true;
 }
 
 // ===== Formulaire livraison =====
@@ -221,7 +251,8 @@ async function decrementStock(pId, attributeId, quantity, orderId) {
 
 // ===== Chargement initial =====
 onMounted(async () => {
-    await findCodStateId();
+    // Direct payment, no need to lookup COD state ID
+    // await findCodStateId();
 
     const storageKey = getCartStorageKey();
     const cartJson = localStorage.getItem(storageKey);
@@ -236,20 +267,30 @@ onMounted(async () => {
     }
 
     const customerJson = localStorage.getItem('customer');
-    if (!customerJson) {
-        router.push('/connexion');
+    let isAnonymous = false;
+    if (customerJson) {
+        try {
+            const parsed = JSON.parse(customerJson);
+            if (Number(parsed?.id) === 1) {
+                isAnonymous = true;
+            }
+        } catch (e) {}
+    }
+
+    if (!customerJson || isAnonymous) {
+        router.push('/selection-profil');
         return;
     }
 
     try {
         customer.value = JSON.parse(customerJson);
     } catch (e) {
-        router.push('/connexion');
+        router.push('/selection-profil');
         return;
     }
 
-    if (!customer.value || !customer.value.id) {
-        router.push('/connexion');
+    if (!customer.value || !customer.value.id || Number(customer.value.id) === 1) {
+        router.push('/selection-profil');
         return;
     }
 
@@ -284,6 +325,9 @@ function validerFormulaire() {
 async function passerCommande() {
     error.value = validerFormulaire();
     if (error.value) return;
+
+    const stockOk = await validateCartStock();
+    if (!stockOk) return;
 
     loading.value = true;
     error.value = '';
@@ -390,9 +434,9 @@ async function passerCommande() {
     <id_lang>1</id_lang>
         <id_shop>1</id_shop>
         <id_shop_group>1</id_shop_group>
-        <module>ps_cashondelivery</module>
+        <module>ps_checkout</module>
         <secure_key>${secureKey}</secure_key>
-    <payment>Paiement à la livraison</payment>
+    <payment>Paiement accepté / En ligne</payment>
         <total_paid>${cartTotal.toFixed(6)}</total_paid>
         <total_paid_real>${cartTotal.toFixed(6)}</total_paid_real>
         <total_products>${cartTotal.toFixed(6)}</total_products>
@@ -521,10 +565,10 @@ async function passerCommande() {
                             Mode de paiement
                         </h3>
                         <div class="payment-option selected">
-                            <Icon icon="lucide:truck" />
+                            <Icon icon="lucide:credit-card" />
                             <div>
-                                <strong>Paiement à la livraison</strong>
-                                <p>Payez en espèces lors de la réception de votre commande</p>
+                                <strong>Paiement en ligne sécurisé</strong>
+                                <p>Votre commande est directement payée et validée</p>
                             </div>
                             <Icon icon="lucide:check-circle" class="check-icon" />
                         </div>
@@ -556,14 +600,23 @@ async function passerCommande() {
                             <span class="summary-item-name">{{ item.name }}</span>
                             <span class="summary-item-qty">x{{ item.quantity }}</span>
                         </div>
-                        <span class="summary-item-price">
-                            {{ (calculateTtc(item.price, item.taxRate) * item.quantity).toFixed(2) }} €
-                        </span>
+                        <div class="summary-item-price">
+                            <span class="summary-item-price-ttc">
+                                {{ (calculateTtc(item.price, item.taxRate) * item.quantity).toFixed(2) }} € TTC
+                            </span>
+                            <span class="summary-item-price-ht">
+                                {{ (Number(item.price || 0) * item.quantity).toFixed(2) }} € HT
+                            </span>
+                        </div>
                     </div>
                 </div>
                 <hr class="summary-sep" />
                 <div class="summary-row">
-                    <span>Sous-total</span>
+                    <span>Sous-total HT</span>
+                    <span>{{ totalPanierHt }} €</span>
+                </div>
+                <div class="summary-row">
+                    <span>Sous-total TTC</span>
                     <span>{{ totalPanier }} €</span>
                 </div>
                 <div class="summary-row">
@@ -571,7 +624,7 @@ async function passerCommande() {
                     <span class="free">Gratuit</span>
                 </div>
                 <div class="summary-row total">
-                    <span>Total</span>
+                    <span>Total TTC</span>
                     <span>{{ totalPanier }} €</span>
                 </div>
             </div>
@@ -583,7 +636,7 @@ async function passerCommande() {
             </div>
             <h2>Commande confirmée !</h2>
             <p v-if="idOrder">Votre commande <strong>#{{ idOrder }}</strong> a été enregistrée avec succès.</p>
-            <p>Vous recevrez une confirmation par email. Votre commande sera payée lors de la livraison.</p>
+            <p>Vous recevrez une confirmation par email. Votre paiement en ligne a bien été validé.</p>
             <router-link to="/" class="btn-home">
                 <Icon icon="lucide:home" />
                 Retour à la boutique
@@ -921,9 +974,22 @@ async function passerCommande() {
 }
 
 .summary-item-price {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+}
+
+.summary-item-price-ttc {
     font-size: 0.95rem;
     font-weight: 700;
     color: #2f3542;
+}
+
+.summary-item-price-ht {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #9aa1af;
 }
 
 .summary-sep {

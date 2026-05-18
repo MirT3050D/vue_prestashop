@@ -5,7 +5,8 @@ import { Icon } from '@iconify/vue'
 const props = defineProps({
     image: { type: String, default: '' },
     description_courte: { type: String, default: '' },
-    prix: { type: [Number, String], default: 0 },
+    prixTtc: { type: [Number, String], default: 0 },
+    prixHt: { type: [Number, String], default: 0 },
     nom: { type: String, default: '' },
     quantite: { type: Number, default: 1 }
 })
@@ -13,7 +14,11 @@ const props = defineProps({
 const emit = defineEmits(['update:quantite', 'supprimer'])
 
 const totalLigne = computed(() => {
-    return (parseFloat(props.prix) * props.quantite).toFixed(2)
+    return (parseFloat(props.prixTtc) * props.quantite).toFixed(2)
+})
+
+const totalLigneHt = computed(() => {
+    return (parseFloat(props.prixHt) * props.quantite).toFixed(2)
 })
 
 function incrementer() {
@@ -45,7 +50,8 @@ function supprimer() {
         <div class="panier-item__details">
             <h3 class="panier-item__nom">{{ nom }}</h3>
             <p class="panier-item__description" v-if="description_courte" v-html="description_courte"></p>
-            <p class="panier-item__prix-unitaire">{{ parseFloat(prix).toFixed(2) }} € / unité</p>
+            <p class="panier-item__prix-unitaire">{{ parseFloat(prixTtc).toFixed(2) }} € / unité <span class="price-label">TTC</span></p>
+            <p class="panier-item__prix-unitaire-ht">{{ parseFloat(prixHt).toFixed(2) }} € / unité <span class="price-label">HT</span></p>
         </div>
 
         <!-- Quantité -->
@@ -65,7 +71,8 @@ function supprimer() {
         <!-- Total ligne -->
         <div class="panier-item__total">
             <span class="panier-item__total-label">Total</span>
-            <span class="panier-item__total-prix">{{ totalLigne }} €</span>
+            <span class="panier-item__total-prix">{{ totalLigne }} € <span class="price-label">TTC</span></span>
+            <span class="panier-item__total-prix-ht">{{ totalLigneHt }} € <span class="price-label">HT</span></span>
         </div>
 
         <!-- Supprimer -->
@@ -170,6 +177,13 @@ function supprimer() {
     color: #a4b0be;
 }
 
+.panier-item__prix-unitaire-ht {
+    margin: 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #9aa1af;
+}
+
 /* === QUANTITE === */
 .panier-item__quantite {
     display: flex;
@@ -254,6 +268,20 @@ function supprimer() {
     font-weight: 800;
     color: #2ed573;
     letter-spacing: -0.5px;
+}
+
+.panier-item__total-prix-ht {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #9aa1af;
+}
+
+.price-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: inherit;
 }
 
 /* === SUPPRIMER === */

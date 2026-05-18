@@ -22,6 +22,7 @@ const lastSelectedOptions = ref({});
 const quantity = ref(1);
 const productTaxRate = ref(0);
 const stock = ref(0);
+const cartQuantity = ref(0);
 
 function getLangText(field) {
     if (!field || !field.language) return '';
@@ -41,30 +42,7 @@ async function updateCurrentStock() {
     if (!product.value) return;
 
     const cleanProductId = safeId(product.value.id);
-    let idProductAttribute = '0';
-
-    if (productCombinations.value.length > 0) {
-        const currentSelectedValues = [];
-        for (const key of Object.keys(selectedOptions.value)) {
-            if (selectedOptions.value[key]) {
-                currentSelectedValues.push(String(selectedOptions.value[key]));
-            }
-        }
-
-        const matchingCombination = productCombinations.value.find(comb => {
-            const combValues = comb.associations?.product_option_values?.product_option_value;
-            if (!combValues) return false;
-            const combValueIds = Array.isArray(combValues)
-                ? combValues.map(v => safeId(v.id))
-                : [safeId(combValues.id)];
-
-            return combValueIds.every(id => currentSelectedValues.includes(id));
-        });
-
-        if (matchingCombination) {
-            idProductAttribute = safeId(matchingCombination.id);
-        }
-    }
+    const idProductAttribute = getSelectedAttributeId();
 
     try {
         const stockData = await getStockAvailables(`filter[id_product]=[${cleanProductId}]&filter[id_product_attribute]=[${idProductAttribute}]&display=[quantity]`);
@@ -234,6 +212,11 @@ watch(selectedOptions, async (newVal) => {
     lastSelectedOptions.value = { ...selectedOptions.value };
     await updateCurrentStock();
     await updateImage();
+    refreshCartQuantity();
+
+    if (maxAddable.value > 0 && quantity.value > maxAddable.value) {
+        quantity.value = maxAddable.value;
+    }
 }, { deep: true });
 
 onMounted(async () => {
@@ -333,6 +316,7 @@ onMounted(async () => {
         await updateCurrentStock();
         // Optionnel : Forcer un premier affichage de l'image de la déclinaison si existante
         await updateImage();
+        refreshCartQuantity();
     } catch (error) {
         console.error("Erreur au chargement de la fiche produit:", error);
     } finally {
@@ -344,6 +328,11 @@ const calculatedPriceTtc = computed(() => {
     if (!product.value) return 0;
     const basePriceHt = parseFloat(product.value.price) || 0;
     return basePriceHt * (1 + productTaxRate.value / 100);
+});
+
+const calculatedPriceHt = computed(() => {
+    if (!product.value) return 0;
+    return parseFloat(product.value.price) || 0;
 });
 
 function getCartStorageKey() {
@@ -359,33 +348,85 @@ function getCartStorageKey() {
     return 'panier_guest';
 }
 
+function getSelectedAttributeId() {
+    if (productCombinations.value.length === 0) return '0';
+
+    const currentSelectedValues = [];
+    for (const key of Object.keys(selectedOptions.value)) {
+        if (selectedOptions.value[key]) {
+            currentSelectedValues.push(String(selectedOptions.value[key]));
+        }
+    }
+
+    const matchingCombination = productCombinations.value.find(comb => {
+        const combValues = comb.associations?.product_option_values?.product_option_value;
+        if (!combValues) return false;
+        const combValueIds = Array.isArray(combValues)
+            ? combValues.map(v => safeId(v.id))
+            : [safeId(combValues.id)];
+
+        return combValueIds.every(id => currentSelectedValues.includes(id));
+    });
+
+    return matchingCombination ? safeId(matchingCombination.id) : '0';
+}
+
+function getExistingCartQuantity(productId, attributeId) {
+    const storageKey = getCartStorageKey();
+    let cart = [];
+    try {
+        const cartJson = localStorage.getItem(storageKey);
+        if (cartJson) {
+            cart = JSON.parse(cartJson);
+        }
+    } catch (e) {
+        console.error("Erreur lecture panier local:", e);
+    }
+
+    const existingItem = cart.find(item =>
+        String(item.id_product) === String(productId) &&
+        String(item.id_product_attribute) === String(attributeId)
+    );
+
+    return existingItem ? Number(existingItem.quantity) || 0 : 0;
+}
+
+function refreshCartQuantity() {
+    if (!product.value) return;
+    const cleanProductId = safeId(product.value.id);
+    const idProductAttribute = getSelectedAttributeId();
+    cartQuantity.value = getExistingCartQuantity(cleanProductId, idProductAttribute);
+}
+
+const maxAddable = computed(() => {
+    return Math.max(stock.value - cartQuantity.value, 0);
+});
+
 function addToCart() {
     if (!product.value) return;
 
     const cleanProductId = safeId(product.value.id);
-    let idProductAttribute = '0';
+    const idProductAttribute = getSelectedAttributeId();
 
-    if (productCombinations.value.length > 0) {
-        const currentSelectedValues = [];
-        for (const key of Object.keys(selectedOptions.value)) {
-            if (selectedOptions.value[key]) {
-                currentSelectedValues.push(String(selectedOptions.value[key]));
-            }
-        }
+    const existingQty = getExistingCartQuantity(cleanProductId, idProductAttribute);
+    const remaining = Math.max(stock.value - existingQty, 0);
 
-        const matchingCombination = productCombinations.value.find(comb => {
-            const combValues = comb.associations?.product_option_values?.product_option_value;
-            if (!combValues) return false;
-            const combValueIds = Array.isArray(combValues)
-                ? combValues.map(v => safeId(v.id))
-                : [safeId(combValues.id)];
+    if (remaining <= 0) {
+        cartSuccessMessage.value = "Stock insuffisant : ce produit est deja au maximum dans votre panier.";
+        showCartNotification.value = true;
+        setTimeout(() => {
+            showCartNotification.value = false;
+        }, 4000);
+        return;
+    }
 
-            return combValueIds.every(id => currentSelectedValues.includes(id));
-        });
-
-        if (matchingCombination) {
-            idProductAttribute = safeId(matchingCombination.id);
-        }
+    if (quantity.value > remaining) {
+        cartSuccessMessage.value = `Stock insuffisant : vous pouvez ajouter au maximum ${remaining} unite(s).`;
+        showCartNotification.value = true;
+        setTimeout(() => {
+            showCartNotification.value = false;
+        }, 4000);
+        return;
     }
 
     const storageKey = getCartStorageKey();
@@ -419,6 +460,8 @@ function addToCart() {
     }
 
     localStorage.setItem(storageKey, JSON.stringify(cart));
+
+    cartQuantity.value = existingQty + quantity.value;
 
     // Déclencher la notification de succès
     cartSuccessMessage.value = `"${getLangText(product.value.name)}" a été ajouté au panier !`;
@@ -463,7 +506,8 @@ function addToCart() {
                 <p class="product-reference">Référence : <span>{{ product.reference || 'N/A' }}</span></p>
 
                 <div class="price-container">
-                    <span class="price-amount">{{ calculatedPriceTtc.toFixed(2) }} €</span>
+                    <span class="price-amount">{{ calculatedPriceTtc.toFixed(2) }} € <span class="price-badge">TTC</span></span>
+                    <span class="price-amount-ht">{{ calculatedPriceHt.toFixed(2) }} € <span class="price-badge">HT</span></span>
                     <span class="price-tax-label">TTC (inclut taxe {{ productTaxRate }}%)</span>
                 </div>
 
@@ -494,14 +538,14 @@ function addToCart() {
                 <div class="actions-container">
                     <div class="quantity-selector">
                         <button @click="quantity > 1 ? quantity-- : null" class="qty-btn"
-                            :disabled="stock === 0">-</button>
-                        <input type="number" v-model.number="quantity" min="1" :max="stock" class="qty-input"
-                            :disabled="stock === 0" />
-                        <button @click="quantity < stock ? quantity++ : null" class="qty-btn"
-                            :disabled="stock === 0 || quantity >= stock">+</button>
+                            :disabled="stock === 0 || maxAddable === 0">-</button>
+                        <input type="number" v-model.number="quantity" min="1" :max="maxAddable > 0 ? maxAddable : 1" class="qty-input"
+                            :disabled="stock === 0 || maxAddable === 0" />
+                        <button @click="quantity < maxAddable ? quantity++ : null" class="qty-btn"
+                            :disabled="stock === 0 || maxAddable === 0 || quantity >= maxAddable">+</button>
                     </div>
 
-                    <button @click="addToCart" class="add-to-cart-btn" :disabled="stock === 0 || quantity > stock">
+                    <button @click="addToCart" class="add-to-cart-btn" :disabled="stock === 0 || maxAddable === 0 || quantity > maxAddable">
                         <Icon icon="solar:cart-large-minimalistic-bold" class="btn-icon" />
                         <span>{{ stock === 0 ? 'Indisponible' : 'Ajouter au panier' }}</span>
                     </button>
@@ -596,6 +640,20 @@ function addToCart() {
     font-size: 2rem;
     font-weight: 800;
     color: #2f3542;
+}
+
+.price-amount-ht {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #9aa1af;
+}
+
+.price-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: inherit;
 }
 
 .price-tax-label {

@@ -92,7 +92,7 @@ async function loadData() {
 
     loadCustomer();
 
-    if (!customer.value) {
+    if (!customer.value || Number(customer.value.id) === 1) {
         isLoading.value = false;
         return null;
     }
@@ -149,11 +149,11 @@ onMounted(loadData);
             <p>Chargement de vos commandes...</p>
         </div>
 
-        <div v-else-if="!customer || !customer.id" class="state-card auth-card">
+        <div v-else-if="!customer || !customer.id || Number(customer.id) === 1" class="state-card auth-card">
             <Icon icon="lucide:lock" class="state-icon" />
             <h2>Connexion requise</h2>
             <p>Connectez-vous pour voir l’état de vos commandes.</p>
-            <router-link to="/connexion" class="btn-primary">
+            <router-link to="/selection-profil" class="btn-primary">
                 <Icon icon="lucide:log-in" />
                 Se connecter
             </router-link>

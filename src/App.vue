@@ -10,16 +10,32 @@ const isBackoffice = computed(() => {
     return route.meta.isBackoffice === true;
 });
 
+function setAnonymous() {
+    let customerData = {
+      id: 1,
+      firstname: 'Anonymous',
+      lastname: 'Anonymous',
+      email: 'anonymous@psgdpr.com'
+    };
+    let token = "dev_token_1";
+    localStorage.setItem('customer', JSON.stringify(customerData));
+    localStorage.setItem('customer_token', JSON.stringify(token));
+    customer.value = customerData;
+}
+
 function loadCustomer() {
     let data = localStorage.getItem('customer');
     if (data) {
         try {
             customer.value = JSON.parse(data);
+            if (!customer.value || !customer.value.id) {
+                setAnonymous();
+            }
         } catch (e) {
-            customer.value = null;
+            setAnonymous();
         }
     } else {
-        customer.value = null;
+        setAnonymous();
     }
 }
 
@@ -27,8 +43,8 @@ function logout() {
     localStorage.removeItem('customer_token');
     localStorage.removeItem('customer');
     localStorage.removeItem('token'); // Also remove admin token
-    customer.value = null;
-  window.dispatchEvent(new Event('customer-updated'));
+    setAnonymous();
+    window.dispatchEvent(new Event('customer-updated'));
     if (isBackoffice.value) {
         window.location.href = '/admin'; // Force redirect to login admin
     }
@@ -95,7 +111,7 @@ onBeforeUnmount(() => {
             <Icon icon="lucide:home" />
             Accueil
           </RouterLink>
-          <RouterLink to="/mes-commandes" class="nav-item" active-class="active">
+          <RouterLink v-if="customer && Number(customer.id) !== 1" to="/mes-commandes" class="nav-item" active-class="active">
             <Icon icon="lucide:receipt-text" />
             Mes commandes
           </RouterLink>
@@ -113,12 +129,12 @@ onBeforeUnmount(() => {
             Déconnexion Admin
           </button>
         </template>
-        <template v-else-if="customer">
+        <template v-else-if="customer && Number(customer.id) !== 1">
           <span class="user-greeting">
             <Icon icon="lucide:user" />
             {{ customer.firstname || customer.email }}
           </span>
-          <RouterLink to="/" class="nav-item">
+          <RouterLink to="/selection-profil" class="nav-item">
             <Icon icon="lucide:users" />
             Changer d'utilisateur
           </RouterLink>
@@ -127,7 +143,7 @@ onBeforeUnmount(() => {
             Déconnexion
           </button>
         </template>
-        <RouterLink v-else-if="!isBackoffice" to="/connexion" class="nav-item login-link" active-class="active">
+        <RouterLink v-else-if="!isBackoffice" to="/selection-profil" class="nav-item login-link" active-class="active">
           <Icon icon="lucide:log-in" />
           Connexion
         </RouterLink>

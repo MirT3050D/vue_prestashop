@@ -1,5 +1,5 @@
 <script setup>
-const props = defineProps(['image', 'name', 'price', 'promo', 'badge']) 
+const props = defineProps(['image', 'name', 'priceHt', 'priceTtc', 'promo', 'badge'])
 </script>
 <template>
     <div class="product-card">
@@ -11,7 +11,8 @@ const props = defineProps(['image', 'name', 'price', 'promo', 'badge'])
         </div>
         <div class="product-info">
             <h3 class="product-name">{{ name }}</h3>
-            <p class="product-price">{{ price }}</p>
+            <p class="product-price">{{ priceTtc }} € <span class="price-label">TTC</span></p>
+            <p class="product-price-ht">{{ priceHt }} € <span class="price-label">HT</span></p>
         </div>
     </div>
 </template>
@@ -108,5 +109,20 @@ const props = defineProps(['image', 'name', 'price', 'promo', 'badge'])
     font-size: 1.25rem;
     font-weight: 700;
     color: #2ed573;
+}
+
+.product-price-ht {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #9aa1af;
+}
+
+.price-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: inherit;
 }
 </style>

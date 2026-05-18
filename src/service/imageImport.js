@@ -32,7 +32,7 @@ export const processImageImport = async (zipFile, logCallback) => {
 
         for (const [index, imageFile] of imageFiles.entries()) {
             const filename = imageFile.name;
-            
+
             // --- FINAL, SIMPLIFIED, AND CORRECT LOGIC ---
             // The product reference is simply the filename without the extension.
             // "M_02.jpeg" -> "M_02"
@@ -43,7 +43,7 @@ export const processImageImport = async (zipFile, logCallback) => {
                 logCallback('warn', `Fichier ignoré : nom de fichier invalide "${filename}".`);
                 continue;
             }
-            
+
             logCallback('info', `Traitement de l'image ${index + 1}/${imageFiles.length} : "${filename}" pour la référence produit "${productRef}".`);
 
             try {
@@ -52,7 +52,7 @@ export const processImageImport = async (zipFile, logCallback) => {
                 if (!productId) {
                     const productSearch = await getXml(`/products?filter[reference]=[${encodeURIComponent(productRef)}]&display=[id]`);
                     const productNode = productSearch?.prestashop?.products?.product;
-                    
+
                     if (!productNode) {
                         throw new Error(`Produit non trouvé.`);
                     }

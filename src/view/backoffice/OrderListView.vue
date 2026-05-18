@@ -82,7 +82,7 @@ function normalizeId(id) {
 }
 
 // States we want to be able to switch to
-const TARGET_STATE_NAMES = ['paiement accepté', 'annulé'];
+const TARGET_STATE_NAMES = ['paiement accepté', 'annulé', 'livré'];
 
 async function fetchData() {
   isLoading.value = true;

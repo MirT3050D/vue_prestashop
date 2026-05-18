@@ -17,11 +17,11 @@ async function fetchCustomers() {
       sort: '[id_DESC]'
     });
     
-    // On garde seulement les clients qui ont un nom et un prénom
+    // On garde seulement les clients qui ont un nom et un prénom, et on exclut le client ID 1 (Anonyme dédié)
     let finalSelection = [];
     for (let i = 0; i < data.length; i++) {
         let c = data[i];
-        if (c.firstname && c.lastname) {
+        if (c.firstname && c.lastname && Number(c.id) !== 1) {
             finalSelection.push(c);
         }
     }
@@ -36,7 +36,65 @@ async function fetchCustomers() {
 }
 
 function selectUser(user) {
+  let shouldRedirectToCheckout = false;
+
+  // Déterminer l'ID du client actuel avant de se connecter au nouveau
+  const currentCustomerJson = localStorage.getItem('customer');
+  let isCurrentlyAnonymous = false;
+  if (currentCustomerJson) {
+    try {
+      const currentCustomer = JSON.parse(currentCustomerJson);
+      if (Number(currentCustomer?.id) === 1) {
+        isCurrentlyAnonymous = true;
+      }
+    } catch (e) {}
+  }
+
   if (user != null) {
+    // Si on se connecte à un utilisateur normal (ex: ID 2),
+    // et qu'on était précédemment connecté en Anonyme (ID 1),
+    // on transfère le panier de l'ID 1 vers l'ID du nouvel utilisateur.
+    if (isCurrentlyAnonymous && Number(user.id) !== 1) {
+      const anonymousCartJson = localStorage.getItem('panier_1');
+      if (anonymousCartJson) {
+        try {
+          const anonymousCart = JSON.parse(anonymousCartJson);
+          if (Array.isArray(anonymousCart) && anonymousCart.length > 0) {
+            shouldRedirectToCheckout = true;
+            const targetKey = `panier_${user.id}`;
+            let targetCart = [];
+            const targetCartJson = localStorage.getItem(targetKey);
+            if (targetCartJson) {
+              try {
+                targetCart = JSON.parse(targetCartJson);
+              } catch (e) {
+                targetCart = [];
+              }
+            }
+            if (!Array.isArray(targetCart)) targetCart = [];
+
+            // Fusionner les articles de l'Anonyme (1) dans le panier de l'utilisateur cible
+            for (const item of anonymousCart) {
+              const existing = targetCart.find(
+                (t) => String(t.id_product) === String(item.id_product) && String(t.id_product_attribute) === String(item.id_product_attribute)
+              );
+              if (existing) {
+                existing.quantity = Number(existing.quantity) + Number(item.quantity);
+              } else {
+                targetCart.push(item);
+              }
+            }
+
+            localStorage.setItem(targetKey, JSON.stringify(targetCart));
+            // Vider le panier de l'Anonyme (1)
+            localStorage.setItem('panier_1', JSON.stringify([]));
+          }
+        } catch (e) {
+          console.error("Erreur lors de la fusion du panier de l'Anonyme:", e);
+        }
+      }
+    }
+
     let customerData = {
       id: user.id,
       firstname: user.firstname,
@@ -44,16 +102,30 @@ function selectUser(user) {
       email: user.email
     };
     let token = "dev_token_" + user.id;
-    
+
     localStorage.setItem('customer', JSON.stringify(customerData));
     localStorage.setItem('customer_token', JSON.stringify(token));
   } else {
-    localStorage.removeItem('customer');
-    localStorage.removeItem('customer_token');
+    // Si on clique sur "Utilisateur Anonyme", on le connecte avec le compte PrestaShop ID 1 (Anonymous)
+    let customerData = {
+      id: 1,
+      firstname: 'Anonymous',
+      lastname: 'Anonymous',
+      email: 'anonymous@psgdpr.com'
+    };
+    let token = "dev_token_1";
+
+    localStorage.setItem('customer', JSON.stringify(customerData));
+    localStorage.setItem('customer_token', JSON.stringify(token));
   }
-  
+
   window.dispatchEvent(new Event('customer-updated'));
-  router.push({ name: 'homeFrontoffice' });
+
+  if (shouldRedirectToCheckout) {
+    router.push({ name: 'checkout' });
+  } else {
+    router.push({ name: 'homeFrontoffice' });
+  }
 }
 
 onMounted(fetchCustomers);

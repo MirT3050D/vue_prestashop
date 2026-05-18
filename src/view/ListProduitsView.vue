@@ -5,6 +5,7 @@ import Loading from '@/components/Loading.vue';
 import { getProducts } from '@/service/productService';
 import { getColumnForList } from '@/service/util';
 import { ref, onMounted } from 'vue';
+import { getProductTaxRate, calculateTtc } from '@/service/price';
 
 const product_columns = ref(null);
 const raw_data = ref(null);
@@ -44,8 +45,7 @@ function getNodeText(field) {
     return field['#text'] ?? null;
 }
 
-function formatProduct(product) {
-    const price = Number(product.price ?? 0);
+function formatProduct(product, price, priceTtc) {
     const imageHref = product.id_default_image?.['@_xlink:href'] ?? null;
     const categoryId = getNodeText(product.id_category_default);
 
@@ -56,7 +56,7 @@ function formatProduct(product) {
         reference: product.reference ?? null,
         category: categoryId,
         price_tax_excluded: price,
-        price_tax_included: price,
+        price_tax_included: priceTtc,
         quantity: product.quantity ?? null,
         active: product.active ?? null
     };
@@ -68,7 +68,19 @@ onMounted(async () => {
     try {
         product_columns.value = getColumnForList('product');
         raw_data.value = await getProducts('display=full');
-        data.value = raw_data.value.map(formatProduct);
+
+        // Build formatted products and compute TTC per product
+        data.value = await Promise.all(raw_data.value.map(async (product) => {
+            const price = Number(product.price ?? 0);
+            let taxRate = 0;
+            try {
+                taxRate = await getProductTaxRate(product.id);
+            } catch (e) {
+                taxRate = 0;
+            }
+            const priceTtc = calculateTtc(price, taxRate);
+            return formatProduct(product, price, priceTtc);
+        }));
     } catch (err) {
         console.error("Error loading products:", err);
         data.value = [];

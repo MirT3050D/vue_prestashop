@@ -3,6 +3,7 @@
 import { onMounted, ref, watch } from 'vue';
 import { getImage } from '@/service/api';
 import { getProducts } from '@/service/productService';
+import { getProductTaxRate } from '@/service/price';
 import { getCategories } from '@/service/categoryService';
 import Loading from '@/components/Loading.vue';
 import ProductBloc from '@/components/frontoffice/ProductBloc.vue';
@@ -16,6 +17,13 @@ const searchName = ref('');
 const searchCategory = ref('');
 const minPrice = ref('');
 const maxPrice = ref('');
+
+function extractText(value) {
+    if (value == null) return null;
+    if (typeof value === 'string' || typeof value === 'number') return value;
+    if (typeof value === 'object') return value['#text'] ?? value['@_id'] ?? value.id ?? null;
+    return null;
+}
 
 // --- CHARGEMENT DES PRODUITS AVEC FILTRES API ---
 async function loadProducts() {
@@ -102,6 +110,28 @@ async function loadProducts() {
                 }
             }
             products.value[i].badge = badge;
+
+            const productId = extractText(product.id);
+            const rawPrice = extractText(product.price);
+            const basePriceHt = Number(rawPrice) || 0;
+            let taxRate = 0;
+            try {
+                taxRate = await getProductTaxRate(productId);
+            } catch (e) {
+                taxRate = 0;
+            }
+
+            console.group(`Price debug: ${productId}`);
+            console.log('raw product.id:', product.id, '->', productId);
+            console.log('raw product.price:', product.price, '->', rawPrice);
+            console.log('basePriceHt:', basePriceHt);
+            console.log('taxRate:', taxRate);
+            console.log('computed TTC:', basePriceHt * (1 + taxRate / 100));
+            console.log('tax group raw:', product.id_tax_rules_group);
+            console.groupEnd();
+
+            products.value[i].priceHt = basePriceHt.toFixed(2);
+            products.value[i].priceTtc = (basePriceHt * (1 + taxRate / 100)).toFixed(2);
         }
 
         loading.value = false;
@@ -184,7 +214,8 @@ onMounted(async () => {
             <div class="products-grid" v-if="products.length > 0">
                 <RouterLink v-for="produit in products" :key="produit.id" :to="`/produit/${produit.id}`"
                     class="product-link">
-                    <ProductBloc :image="produit.image" :name="produit.name.language['#text']" :price="produit.price"
+                    <ProductBloc :image="produit.image" :name="produit.name.language['#text']"
+                        :price-ht="produit.priceHt" :price-ttc="produit.priceTtc"
                         :badge="produit.badge">
                     </ProductBloc>
                 </RouterLink>

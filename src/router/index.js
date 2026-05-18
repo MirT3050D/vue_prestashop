@@ -21,13 +21,13 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      name: 'userSelection',
-      component: UserSelectionView
-    },
-    {
-      path: '/catalogue',
       name: 'homeFrontoffice',
       component: HomeView
+    },
+    {
+      path: '/selection-profil',
+      name: 'userSelection',
+      component: UserSelectionView
     },
     {
       path: '/admin/backofficeDashboard',

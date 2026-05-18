@@ -10,6 +10,7 @@ import { getProduct } from '@/service/productService';
 import { createOrder, getOrderStates } from '@/service/orderService';
 import { getCustomerAddresses } from '@/service/addressService';
 import { getCustomer } from '@/service/customerService';
+import { getStockAvailables } from '@/service/stockService';
 import { useRouter } from 'vue-router';
 
 const router = useRouter();
@@ -71,6 +72,23 @@ function extractText(node) {
         return String(node);
     }
     return String(node);
+}
+
+async function getItemStock(item) {
+    const productId = extractText(item?.id_product);
+    const attributeId = extractText(item?.id_product_attribute) || '0';
+    if (!productId) return 0;
+
+    try {
+        const stockData = await getStockAvailables(`filter[id_product]=[${productId}]&filter[id_product_attribute]=[${attributeId}]&display=[quantity]`);
+        if (stockData && stockData.length > 0) {
+            return parseInt(extractText(stockData[0].quantity), 10) || 0;
+        }
+    } catch (e) {
+        console.warn('Erreur récupération stock panier:', e);
+    }
+
+    return 0;
 }
 
 function getCartStorageKey() {
@@ -267,11 +285,36 @@ const totalPanier = computed(() => {
     return total.toFixed(2);
 });
 
-function updateQuantity(index, newQty) {
-    if (newQty > 0) {
-        panier.value[index].quantity = newQty;
-        localStorage.setItem(getCartStorageKey(), JSON.stringify(panier.value));
+const totalPanierHt = computed(() => {
+    let total = 0;
+    for (let i = 0; i < panier.value.length; i++) {
+        let item = panier.value[i];
+        total += (Number(item.price || 0) * item.quantity);
     }
+    return total.toFixed(2);
+});
+
+async function updateQuantity(index, newQty) {
+    if (newQty <= 0) return;
+
+    const item = panier.value[index];
+    if (!item) return;
+
+    const available = await getItemStock(item);
+    if (available <= 0) {
+        message.value = `Stock insuffisant pour ${item.name || 'ce produit'}.`;
+        messageType.value = 'error';
+        return;
+    }
+
+    if (newQty > available) {
+        message.value = `Stock insuffisant pour ${item.name || 'ce produit'}. Disponible: ${available}.`;
+        messageType.value = 'error';
+        newQty = available;
+    }
+
+    panier.value[index].quantity = newQty;
+    localStorage.setItem(getCartStorageKey(), JSON.stringify(panier.value));
 }
 
 function removeItem(index) {
@@ -320,7 +363,7 @@ async function passerCommande() {
             <div class="main_left">
                 <div class="items-list">
                     <ProductPanier v-for="(item, index) in panier" :key="index" :nom="item.name"
-                        :prix="calculateTtc(item.price, item.taxRate)" :quantite="item.quantity" :image="item.image"
+                        :prix-ttc="calculateTtc(item.price, item.taxRate)" :prix-ht="item.price" :quantite="item.quantity" :image="item.image"
                         @update:quantite="(newQty) => updateQuantity(index, newQty)" @supprimer="removeItem(index)" />
                 </div>
 
@@ -343,7 +386,11 @@ async function passerCommande() {
                     <h2 class="summary-title">Récapitulatif</h2>
 
                     <div class="summary-row">
-                        <span>Sous-total</span>
+                        <span>Sous-total HT</span>
+                        <span>{{ totalPanierHt }} €</span>
+                    </div>
+                    <div class="summary-row">
+                        <span>Sous-total TTC</span>
                         <span>{{ totalPanier }} €</span>
                     </div>
                     <div class="summary-row">
@@ -354,7 +401,7 @@ async function passerCommande() {
                     <hr class="separator">
 
                     <div class="summary-row total">
-                        <span>Total (TTC)</span>
+                        <span>Total TTC</span>
                         <span class="total-price">{{ totalPanier }} €</span>
                     </div>
 
