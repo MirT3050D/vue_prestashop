@@ -25,31 +25,57 @@ function extractText(value) {
     return null;
 }
 
+function extractLanguageText(field) {
+    if (field == null) return '';
+    if (typeof field === 'string' || typeof field === 'number') return String(field);
+    const languageNode = field.language;
+    if (Array.isArray(languageNode)) {
+        return String(languageNode[0]?.['#text'] ?? languageNode[0] ?? '') || '';
+    }
+    if (languageNode && typeof languageNode === 'object') {
+        return String(languageNode['#text'] ?? '') || '';
+    }
+    if (typeof field === 'object') {
+        return String(field['#text'] ?? '') || '';
+    }
+    return '';
+}
+
 // --- CHARGEMENT DES PRODUITS AVEC FILTRES API ---
 async function loadProducts() {
     try {
         loading.value = true;
 
-        // Construction des filtres PrestaShop
-        let params = "display=full";
+        console.group('HomeView filters');
+        console.log('searchName:', searchName.value);
+        console.log('searchCategory:', searchCategory.value);
+        console.log('minPrice:', minPrice.value, 'maxPrice:', maxPrice.value);
+        console.groupEnd();
 
-        if (searchName.value) {
-            params += "&filter[name]=%" + searchName.value + "%";
-        }
+        const productList = await getProducts('display=full');
+        const searchLower = String(searchName.value || '').trim().toLowerCase();
+        const categoryFilter = String(searchCategory.value || '').trim();
+        const min = minPrice.value !== '' ? Number(minPrice.value) : null;
+        const max = maxPrice.value !== '' ? Number(maxPrice.value) : null;
 
-        if (searchCategory.value) {
-            params += "&filter[id_category_default]=" + searchCategory.value;
-        }
+        const filteredList = productList.filter((product) => {
+            const name = extractLanguageText(product.name).toLowerCase();
+            const categoryId = String(extractText(product.id_category_default) || '');
+            const price = Number(extractText(product.price)) || 0;
 
-        // Filtre de prix (format: [min,max])
-        if (minPrice.value || maxPrice.value) {
-            let min = minPrice.value || 0;
-            let max = maxPrice.value || 999999;
-            params += "&filter[price]=[" + min + "," + max + "]";
-        }
+            if (searchLower && !name.includes(searchLower)) return false;
+            if (categoryFilter && categoryId !== categoryFilter) return false;
+            if (min !== null && price < min) return false;
+            if (max !== null && price > max) return false;
+            return true;
+        });
 
-        const productList = await getProducts(params);
-        products.value = productList;
+        console.log('HomeView filter result:', {
+            total: productList.length,
+            filtered: filteredList.length
+        });
+
+        products.value = filteredList;
         console.log("product list", productList[0]);
         console.log("product value", products.value);
 

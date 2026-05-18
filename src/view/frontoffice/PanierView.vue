@@ -1,6 +1,6 @@
 <script setup>
 // Remplace ton import existant par celui-ci :
-import { createCart, getCarts, getCart, mergeUnpaidCarts, getUnpaidCarts } from '@/service/cartService';
+import { createCart, getCarts, getCart, mergeUnpaidCarts, getUnpaidCarts, deleteCart } from '@/service/cartService';
 import { onMounted, ref, computed } from 'vue';
 import ProductPanier from '@/components/frontoffice/ProductPanier.vue';
 import { Icon } from '@iconify/vue';
@@ -326,6 +326,25 @@ function viderPanier() {
     if (confirm("Voulez-vous vraiment vider votre panier ?")) {
         panier.value = [];
         localStorage.setItem(getCartStorageKey(), JSON.stringify([]));
+        // Nettoyage des paniers non payés côté API pour éviter les retours fantômes
+        const customerJson = localStorage.getItem('customer');
+        if (customerJson) {
+            try {
+                const customerData = JSON.parse(customerJson);
+                if (customerData?.id) {
+                    getUnpaidCarts(customerData.id).then((carts) => {
+                        carts.forEach((cart) => {
+                            const cartId = extractText(cart.id);
+                            if (cartId) {
+                                deleteCart(cartId);
+                            }
+                        });
+                    });
+                }
+            } catch (e) {
+                console.warn('Erreur nettoyage panier API:', e);
+            }
+        }
     }
 }
 

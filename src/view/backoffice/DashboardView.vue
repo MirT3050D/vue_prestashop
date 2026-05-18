@@ -1,6 +1,8 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import { getOrders } from '@/service/orderService';
+import { getProduct } from '@/service/productService';
+import { getCategories } from '@/service/categoryService';
 import StatistiqueVente from '@/components/backoffice/StatistiqueVente.vue';
 import MeilleurProduit from '@/components/backoffice/MeilleurProduit.vue';
 
@@ -8,6 +10,9 @@ const rawOrders = ref([]);
 const startDate = ref('');
 const endDate = ref('');
 const aggregationInterval = ref('daily');
+const productInfoById = ref({});
+const categoryNameById = ref({});
+const isRefreshing = ref(false);
 
 // Remplacement de la fonction fléchée et du ternaire (? :) par des if/else
 function extractText(v) {
@@ -39,6 +44,33 @@ function toNumber(v) {
   } else {
     return 0;
   }
+}
+
+function getLanguageText(node) {
+  if (node == null) return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) {
+    return extractText(node[0]?.['#text'] ?? node[0]) || '';
+  }
+  if (typeof node === 'object') {
+    return extractText(node['#text'] ?? node.language ?? node) || '';
+  }
+  return '';
+}
+
+function normalizeArray(node) {
+  if (!node) return [];
+  return Array.isArray(node) ? node : [node];
+}
+
+function getOrderRows(order) {
+  if (!order || !order.associations || !order.associations.order_rows) return [];
+  return normalizeArray(order.associations.order_rows.order_row);
+}
+
+function formatMoney(value) {
+  const amount = Number(value) || 0;
+  return amount.toFixed(2);
 }
 
 // Fonction classique
@@ -181,6 +213,85 @@ const topProducts = computed(function () {
   return sortedArray.slice(0, 5); // Garde seulement les 5 premiers
 });
 
+const categoryProfitStats = computed(function () {
+  const stats = {};
+
+  for (let i = 0; i < filteredOrders.value.length; i++) {
+    const o = filteredOrders.value[i];
+    const rows = getOrderRows(o);
+
+    for (let j = 0; j < rows.length; j++) {
+      const row = rows[j];
+      const productId = extractText(row.product_id);
+      if (!productId) continue;
+
+      const qty = toNumber(row.product_quantity);
+      const saleHt = toNumber(row.unit_price_tax_excl) * qty;
+      const saleTtc = toNumber(row.unit_price_tax_incl) * qty;
+
+      const productInfo = productInfoById.value[productId] || {};
+      const categoryId = productInfo.categoryId || '0';
+      const categoryName = categoryNameById.value[categoryId] || 'Sans categorie';
+
+      if (!stats[categoryId]) {
+        stats[categoryId] = {
+          categoryId: categoryId,
+          categoryName: categoryName,
+          totalSalesHt: 0,
+          totalSalesTtc: 0,
+          totalPurchaseHt: 0,
+          profit: 0
+        };
+      }
+
+      stats[categoryId].totalSalesHt += saleHt;
+      stats[categoryId].totalSalesTtc += saleTtc;
+      stats[categoryId].totalPurchaseHt += (productInfo.wholesalePrice || 0) * qty;
+    }
+  }
+
+  const statsArray = Object.values(stats);
+  for (let k = 0; k < statsArray.length; k++) {
+    const item = statsArray[k];
+    item.profit = item.totalSalesHt - item.totalPurchaseHt;
+  }
+
+  return statsArray.sort(function (a, b) {
+    return b.profit - a.profit;
+  });
+});
+
+const totalSalesHt = computed(function () {
+  let total = 0;
+  const list = categoryProfitStats.value;
+  for (let i = 0; i < list.length; i++) {
+    total += list[i].totalSalesHt;
+  }
+  return total;
+});
+
+const totalSalesTtc = computed(function () {
+  let total = 0;
+  const list = categoryProfitStats.value;
+  for (let i = 0; i < list.length; i++) {
+    total += list[i].totalSalesTtc;
+  }
+  return total;
+});
+
+const totalPurchaseHt = computed(function () {
+  let total = 0;
+  const list = categoryProfitStats.value;
+  for (let i = 0; i < list.length; i++) {
+    total += list[i].totalPurchaseHt;
+  }
+  return total;
+});
+
+const totalProfit = computed(function () {
+  return totalSalesHt.value - totalPurchaseHt.value;
+});
+
 // Déclaration de fonction asynchrone classique
 async function fetchData() {
   rawOrders.value = await getOrders({ display: 'full' });
@@ -212,6 +323,57 @@ async function fetchData() {
       endDate.value = validDates[validDates.length - 1];
     }
   }
+
+  const productIds = {};
+  for (let i = 0; i < rawOrders.value.length; i++) {
+    const rows = getOrderRows(rawOrders.value[i]);
+    for (let j = 0; j < rows.length; j++) {
+      const pid = extractText(rows[j].product_id);
+      if (pid) productIds[pid] = true;
+    }
+  }
+
+  const ids = Object.keys(productIds);
+  const infoMap = {};
+  for (let i = 0; i < ids.length; i++) {
+    const pid = ids[i];
+    try {
+      const product = await getProduct(pid, 'display=[id,wholesale_price,id_category_default,name]');
+      if (product) {
+        infoMap[pid] = {
+          wholesalePrice: toNumber(extractText(product.wholesale_price)),
+          categoryId: extractText(product.id_category_default) || '0',
+          name: getLanguageText(product.name?.language || product.name)
+        };
+      }
+    } catch (e) {
+      infoMap[pid] = { wholesalePrice: 0, categoryId: '0', name: '' };
+    }
+  }
+  productInfoById.value = infoMap;
+
+  const categoryMap = {};
+  try {
+    const cats = await getCategories('display=[id,name]');
+    for (let i = 0; i < cats.length; i++) {
+      const catId = extractText(cats[i].id);
+      const catName = getLanguageText(cats[i].name?.language || cats[i].name);
+      if (catId) categoryMap[catId] = catName || 'Sans categorie';
+    }
+  } catch (e) {
+    // Keep empty map if categories fail
+  }
+  categoryNameById.value = categoryMap;
+}
+
+async function handleRefresh() {
+  if (isRefreshing.value) return;
+  isRefreshing.value = true;
+  try {
+    await fetchData();
+  } finally {
+    isRefreshing.value = false;
+  }
 }
 
 onMounted(fetchData);
@@ -231,7 +393,9 @@ onMounted(fetchData);
           <option value="monthly">Mensuel</option>
           <option value="yearly">Annuel</option>
         </select>
-        <button class="btn-refresh" @click="fetchData">Actualiser</button>
+        <button class="btn-refresh" type="button" :disabled="isRefreshing" @click="handleRefresh">
+          {{ isRefreshing ? 'Chargement...' : 'Actualiser' }}
+        </button>
       </div>
     </header>
 
@@ -239,6 +403,40 @@ onMounted(fetchData);
       <StatistiqueVente :stats="salesStats" />
       <MeilleurProduit :produits="topProducts" />
     </div>
+
+    <section class="summary-section">
+      <div class="summary-card">
+        <p>Ventes HT</p>
+        <h3>{{ formatMoney(totalSalesHt) }} €</h3>
+      </div>
+      <div class="summary-card">
+        <p>Ventes TTC</p>
+        <h3>{{ formatMoney(totalSalesTtc) }} €</h3>
+      </div>
+      <div class="summary-card">
+        <p>Achats HT</p>
+        <h3>{{ formatMoney(totalPurchaseHt) }} €</h3>
+      </div>
+      <div class="summary-card highlight">
+        <p>Benefice</p>
+        <h3>{{ formatMoney(totalProfit) }} €</h3>
+      </div>
+    </section>
+
+    <section class="category-profit">
+      <h2>Benefice par categorie</h2>
+      <div class="category-list">
+        <div class="category-row" v-for="cat in categoryProfitStats" :key="cat.categoryId">
+          <div class="category-name">{{ cat.categoryName }}</div>
+          <div class="category-values">
+            <span>Ventes HT: {{ formatMoney(cat.totalSalesHt) }} €</span>
+            <span>Ventes TTC: {{ formatMoney(cat.totalSalesTtc) }} €</span>
+            <span>Achats HT: {{ formatMoney(cat.totalPurchaseHt) }} €</span>
+            <span class="profit">Benefice: {{ formatMoney(cat.profit) }} €</span>
+          </div>
+        </div>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -307,5 +505,81 @@ onMounted(fetchData);
   grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
   gap: 25px;
   align-items: start;
+}
+
+.summary-section {
+  margin-top: 25px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.summary-card {
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 16px 18px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+}
+
+.summary-card p {
+  margin: 0 0 6px 0;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.summary-card h3 {
+  margin: 0;
+  font-size: 1.4rem;
+  color: #0f172a;
+}
+
+.summary-card.highlight {
+  border: 2px solid #22c55e;
+}
+
+.category-profit {
+  margin-top: 24px;
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+}
+
+.category-profit h2 {
+  margin: 0 0 12px 0;
+  font-size: 1.1rem;
+  color: #0f172a;
+}
+
+.category-list {
+  display: grid;
+  gap: 10px;
+}
+
+.category-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+}
+
+.category-name {
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.category-values {
+  display: flex;
+  gap: 12px;
+  font-size: 0.9rem;
+  color: #334155;
+}
+
+.category-values .profit {
+  font-weight: 700;
+  color: #16a34a;
 }
 </style>

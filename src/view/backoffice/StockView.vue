@@ -2,6 +2,8 @@
 import { onMounted, ref, computed } from 'vue';
 import { getProducts } from '@/service/productService';
 import { getStockAvailables, updateProductStock } from '@/service/stockService';
+import { getOrders } from '@/service/orderService';
+import { getCategories } from '@/service/categoryService';
 import { getXml, postXml } from '@/service/api';
 import Loading from '@/components/Loading.vue';
 
@@ -29,6 +31,11 @@ function getLangText(field) {
     return field.language['#text'];
 }
 
+function getCategoryName(categoryId, categoryMap) {
+    if (!categoryId) return 'Sans categorie';
+    return categoryMap[categoryId] || 'Sans categorie';
+}
+
 function triggerBanner(msg, type) {
     message.value = msg;
     messageType.value = type;
@@ -45,14 +52,61 @@ async function loadStockDashboard() {
 
     try {
         // 1. Récupération parallèle de TOUTES les données nécessaires
-        const [productsList, stocksList, responseCombs] = await Promise.all([
+        const [productsList, stocksList, responseCombs, categoriesList] = await Promise.all([
             getProducts('display=full'),
             getStockAvailables('display=full'),
-            getXml('/combinations?display=full')
+            getXml('/combinations?display=full'),
+            getCategories('display=[id,name]')
         ]);
+
+        // 1.1 Chargement des commandes payees (etat 2) pour calculer les reserves
+        let paidOrders = [];
+        try {
+            paidOrders = await getOrders({ display: 'full', 'filter[current_state]': '[2]' });
+        } catch (e) {
+            paidOrders = [];
+        }
+        if (!paidOrders || paidOrders.length === 0) {
+            // Fallback si le filtre ne renvoie rien
+            paidOrders = await getOrders({ display: 'full' });
+            paidOrders = paidOrders.filter(o => extractId(o.current_state) === '2');
+        }
+
+        const reservedMap = {};
+        for (let i = 0; i < paidOrders.length; i++) {
+            const order = paidOrders[i];
+            const rows = order?.associations?.order_rows?.order_row || [];
+            const rowList = Array.isArray(rows) ? rows : [rows];
+
+            for (let j = 0; j < rowList.length; j++) {
+                const row = rowList[j];
+                const productId = extractId(row.product_id);
+                const attrId = extractId(row.product_attribute_id) || '0';
+                if (!productId) continue;
+                const qty = parseInt(extractId(row.product_quantity), 10) || 0;
+                const key = `${productId}:${attrId}`;
+                reservedMap[key] = (reservedMap[key] || 0) + qty;
+            }
+        }
 
         const combinationsList = responseCombs?.prestashop?.combinations?.combination || [];
         const combs = Array.isArray(combinationsList) ? combinationsList : [combinationsList];
+
+        const categoryMap = {};
+        if (categoriesList && Array.isArray(categoriesList)) {
+            categoriesList.forEach(cat => {
+                const catId = extractId(cat.id);
+                let catName = 'Sans categorie';
+                if (cat && cat.name && cat.name.language) {
+                    if (Array.isArray(cat.name.language)) {
+                        catName = cat.name.language[0]['#text'] || catName;
+                    } else {
+                        catName = cat.name.language['#text'] || catName;
+                    }
+                }
+                if (catId) categoryMap[catId] = catName;
+            });
+        }
 
         // 2. Détection des produits possédant des déclinaisons
         const productsWithVariants = new Set();
@@ -76,6 +130,9 @@ async function loadStockDashboard() {
             const product = productsList.find(p => extractId(p.id) === pId);
             if (!product) continue;
 
+            const categoryId = extractId(product.id_category_default);
+            const categoryName = getCategoryName(categoryId, categoryMap);
+
             // Extraction du joli nom de la déclinaison
             let variantName = '-';
             if (attrId !== '0') {
@@ -88,7 +145,10 @@ async function loadStockDashboard() {
                 }
             }
 
-            const qty = parseInt(stock.quantity['#text'] || stock.quantity, 10) || 0;
+            const reservedQty = reservedMap[`${pId}:${attrId}`] || 0;
+            const availableQty = parseInt(stock.quantity['#text'] || stock.quantity, 10)|| 0 ;
+            const qty = availableQty + reservedQty;
+            
 
             tempItems.push({
                 id: extractId(stock.id),
@@ -97,7 +157,10 @@ async function loadStockDashboard() {
                 name: getLangText(product.name),
                 reference: product.reference || '',
                 variantName: variantName,
+                categoryName: categoryName,
                 quantity: qty,
+                reserved_quantity: reservedQty,
+                available_quantity: availableQty,
                 editable_quantity: qty,
                 is_saving: false
             });
@@ -200,8 +263,11 @@ onMounted(loadStockDashboard);
                     <tr>
                         <th>Réf.</th>
                         <th>Article concerné</th>
+                        <th>Catégorie</th>
                         <th>Déclinaison</th>
-                        <th>Quantité Dispo.</th>
+                        <th>Qté physique</th>
+                        <th>Qté reservé</th>
+                        <th>Qté disponible</th>
                         <th>Ajuster le stock</th>
                         <th>Action</th>
                     </tr>
@@ -210,6 +276,7 @@ onMounted(loadStockDashboard);
                     <tr v-for="item in filteredItems" :key="item.id">
                         <td><span class="ref-badge">{{ item.reference || 'N/A' }}</span></td>
                         <td><strong>{{ item.name }}</strong></td>
+                        <td>{{ item.categoryName }}</td>
 
                         <td>
                             <span v-if="item.variantName !== '-'" class="variant-badge">{{ item.variantName }}</span>
@@ -220,6 +287,17 @@ onMounted(loadStockDashboard);
                             <span
                                 :class="['qty-badge', item.quantity > 5 ? 'qty-ok' : (item.quantity > 0 ? 'qty-low' : 'qty-empty')]">
                                 {{ item.quantity }}
+                            </span>
+                        </td>
+
+                        <td>
+                            <span class="qty-badge qty-reserved">{{ item.reserved_quantity }}</span>
+                        </td>
+
+                        <td>
+                            <span
+                                :class="['qty-badge', item.available_quantity > 5 ? 'qty-ok' : (item.available_quantity > 0 ? 'qty-low' : 'qty-empty')]">
+                                {{ item.available_quantity }}
                             </span>
                         </td>
 
@@ -385,6 +463,11 @@ onMounted(loadStockDashboard);
 .qty-empty {
     background-color: #fee2e2;
     color: #991b1b;
+}
+
+.qty-reserved {
+    background-color: #e0f2fe;
+    color: #0369a1;
 }
 
 .qty-input {

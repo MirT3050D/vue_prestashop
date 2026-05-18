@@ -4,10 +4,6 @@ import { Icon } from '@iconify/vue';
 const props = defineProps(['dropdown_title', 'contents']);
 const click = ref(false);
 function clickOnDropDown() {
-    console.log("oui je clique");
-    console.log("ref = ", click);
-    console.log("ref value", ref.value)
-    
     if (click.value) {
         click.value = false;
     }
@@ -37,14 +33,16 @@ function clickOnDropDown() {
             :class="{ open: click }"
             @click="clickOnDropDown"
         />
-        <div class="elements" v-if="click" v-for="content in contents">
-            <ul>
-                <RouterLink :to="content.url">
-                    <li>
-                        {{ content.label }}
+        <div class="elements" v-if="click">
+            <slot>
+                <ul>
+                    <li v-for="content in contents" :key="content.url || content.label">
+                        <RouterLink :to="content.url">
+                            {{ content.label }}
+                        </RouterLink>
                     </li>
-                </RouterLink>
-            </ul>
+                </ul>
+            </slot>
         </div>
     </div>
 </template>
@@ -122,6 +120,12 @@ function clickOnDropDown() {
     border-radius: 8px;
     color: #e2e8f0;
     transition: color 160ms ease, background 160ms ease;
+}
+
+.elements a {
+    color: inherit;
+    text-decoration: none;
+    display: block;
 }
 
 .elements li:hover {
