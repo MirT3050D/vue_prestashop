@@ -1,13 +1,16 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import { getOrders } from '@/service/orderService';
-import { getProduct } from '@/service/productService';
+import { getProduct, getProducts } from '@/service/productService';
 import { getCategories } from '@/service/categoryService';
+import { getStockAvailables } from '@/service/stockService';
 import StatistiqueVente from '@/components/backoffice/StatistiqueVente.vue';
 import MeilleurProduit from '@/components/backoffice/MeilleurProduit.vue';
 import Loading from '@/components/Loading.vue';
 
 const rawOrders = ref([]);
+const allProducts = ref([]);
+const allStocks = ref([]);
 const startDate = ref('');
 const endDate = ref('');
 const aggregationInterval = ref('daily');
@@ -294,14 +297,71 @@ const totalProfit = computed(function () {
   return totalSalesHt.value - totalPurchaseHt.value;
 });
 
+const totalStockPurchaseHt = computed(function () {
+  const wholesalePriceById = {};
+  for (let i = 0; i < allProducts.value.length; i++) {
+    const p = allProducts.value[i];
+    const pid = extractText(p.id);
+    wholesalePriceById[pid] = toNumber(extractText(p.wholesale_price));
+  }
+
+  const stockQtyById = {};
+  for (let i = 0; i < allStocks.value.length; i++) {
+    const s = allStocks.value[i];
+    const pid = extractText(s.id_product);
+    const attrId = extractText(s.id_product_attribute) || '0';
+    if (attrId === '0') {
+      stockQtyById[pid] = toNumber(extractText(s.quantity));
+    }
+  }
+
+  const soldQtyById = {};
+  for (let i = 0; i < filteredOrders.value.length; i++) {
+    const o = filteredOrders.value[i];
+    const rows = getOrderRows(o);
+    for (let j = 0; j < rows.length; j++) {
+      const row = rows[j];
+      const pid = extractText(row.product_id);
+      if (pid) {
+        const qty = toNumber(row.product_quantity);
+        soldQtyById[pid] = (soldQtyById[pid] || 0) + qty;
+      }
+    }
+  }
+
+  let total = 0;
+  for (let i = 0; i < allProducts.value.length; i++) {
+    const p = allProducts.value[i];
+    const pid = extractText(p.id);
+    const wholesalePrice = wholesalePriceById[pid] || 0;
+    const stockQty = stockQtyById[pid] || 0;
+    const soldQty = soldQtyById[pid] || 0;
+    total += wholesalePrice * (stockQty + soldQty);
+  }
+
+  return total;
+});
+
+const totalStockProfit = computed(function () {
+  return totalSalesHt.value - totalStockPurchaseHt.value;
+});
+
 // Déclaration de fonction asynchrone classique
 async function fetchData() {
   isLoading.value = true;
   try {
-    const orders = await getOrders({ display: 'full' });
+    const [orders, productsData, stocksData] = await Promise.all([
+      getOrders({ display: 'full' }),
+      getProducts('display=[id,wholesale_price]'),
+      getStockAvailables('display=[id_product,id_product_attribute,quantity]')
+    ]);
+
     rawOrders.value = orders.filter(function (o) {
       return extractText(o.current_state) !== '6';
     });
+
+    allProducts.value = productsData;
+    allStocks.value = stocksData;
 
     if (rawOrders.value.length > 0 && !startDate.value) {
 
@@ -436,6 +496,14 @@ onMounted(fetchData);
         <div class="summary-card highlight">
           <p>Benefice</p>
           <h3>{{ formatMoney(totalProfit) }} €</h3>
+        </div>
+        <div class="summary-card">
+          <p>Prix d'achat total</p>
+          <h3>{{ formatMoney(totalStockPurchaseHt) }} €</h3>
+        </div>
+        <div class="summary-card highlight-purple">
+          <p>Benefice total</p>
+          <h3>{{ formatMoney(totalStockProfit) }} €</h3>
         </div>
       </section>
 
@@ -598,6 +666,10 @@ onMounted(fetchData);
 .category-values .profit {
   font-weight: 700;
   color: #16a34a;
+}
+
+.summary-card.highlight-purple {
+  border: 2px solid #a855f7;
 }
 
 .loading-container {
