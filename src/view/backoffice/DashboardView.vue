@@ -294,7 +294,10 @@ const totalProfit = computed(function () {
 
 // Déclaration de fonction asynchrone classique
 async function fetchData() {
-  rawOrders.value = await getOrders({ display: 'full' });
+  const orders = await getOrders({ display: 'full' });
+  rawOrders.value = orders.filter(function (o) {
+    return extractText(o.current_state) !== '6';
+  });
 
   if (rawOrders.value.length > 0 && !startDate.value) {
 
