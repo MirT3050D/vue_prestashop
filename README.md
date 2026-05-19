@@ -1,6 +1,22 @@
-# vue
+# PrestaShop Vue Client
 
-This template should help get you started developing with Vue 3 in Vite.
+Ce projet est un client web moderne bâti avec Vue 3 et Vite, connecté au Webservice REST de PrestaShop.
+
+---
+
+## 📖 Documentation du Projet
+
+Retrouvez ci-dessous la liste complète des guides d'explication de l'application, classés par domaine :
+
+1.  **[Architecture Globale](file:///home/rahaj/projet/vue/doc/architecture.md)** : Fonctionnement du routage (`Vue Router`), de la passerelle proxy API (`Vite Proxy`), et du service de conversion JSON <-> XML.
+2.  **[Services Applicatifs (`Services Index`)](file:///home/rahaj/projet/vue/doc/services.md)** : Index détaillé des connecteurs d'API (Authentification, Clients, Paniers, Commandes, Gestion de stocks et Taxes).
+3.  **[Workflows d'Importation (`Imports Index`)](file:///home/rahaj/projet/vue/doc/imports_workflow.md)** : Fonctionnement des routines d'import de CSV (Produits, Déclinaisons, Images, Commandes d'historique).
+4.  **[Composants Communs & Widgets (`Components Index`)](file:///home/rahaj/projet/vue/doc/components.md)** : Documentation des éléments d'interface réutilisables, formulaires de connexion et graphiques.
+5.  **[Vues d'Administration (`Back-office Index`)](file:///home/rahaj/projet/vue/doc/backoffice.md)** : Description du tableau de bord (KPIs), de l'historique des commandes d'administration, de la mise à jour rapide des stocks et de la traçabilité des mouvements.
+6.  **[Vues Publiques (`Front-office Index`)](file:///home/rahaj/projet/vue/doc/frontoffice.md)** : Description du tunnel de commande (Checkout), de la sélection intelligente des déclinaisons, de la fusion de paniers orphelins et des badges promotionnels temporels.
+7.  **[Sécurité & Réinitialisation de Base](file:///home/rahaj/projet/vue/doc/database_reset.md)** : Règles de protection de la base de données et ordre de purge séquentiel des tables.
+
+---
 
 ## Recommended IDE Setup
 

@@ -146,9 +146,9 @@ async function loadStockDashboard() {
             }
 
             const reservedQty = reservedMap[`${pId}:${attrId}`] || 0;
-            const availableQty = parseInt(stock.quantity['#text'] || stock.quantity, 10)|| 0 ;
+            const availableQty = parseInt(stock.quantity['#text'] || stock.quantity, 10) || 0;
             const qty = availableQty + reservedQty;
-            
+
 
             tempItems.push({
                 id: extractId(stock.id),
@@ -228,12 +228,39 @@ async function handleSaveStock(item) {
     }
 }
 
+// ============================================================================
+// PROPRIÉTÉS CALCULÉES
+// ============================================================================
 const filteredItems = computed(() => {
     return items.value.filter(item => {
         const matchTxt = item.name.toLowerCase().includes(searchTxt.value.toLowerCase()) ||
             item.reference.toLowerCase().includes(searchTxt.value.toLowerCase());
         return matchTxt;
     });
+});
+
+// NOUVEAU : Résumé global par catégorie
+const categoryStocks = computed(() => {
+    const categories = {};
+
+    for (const item of items.value) {
+        const cat = item.categoryName;
+
+        if (!categories[cat]) {
+            categories[cat] = {
+                name: cat,
+                quantity: 0,
+                reserved_quantity: 0,
+                available_quantity: 0
+            };
+        }
+
+        categories[cat].quantity += item.quantity;
+        categories[cat].reserved_quantity += item.reserved_quantity;
+        categories[cat].available_quantity += item.available_quantity;
+    }
+
+    return Object.values(categories).sort((a, b) => a.name.localeCompare(b.name));
 });
 
 onMounted(loadStockDashboard);
@@ -319,6 +346,51 @@ onMounted(loadStockDashboard);
                 Aucun produit trouvé.
             </div>
         </div>
+
+        <div class="header-section mt-40">
+            <h2>Résumé par Catégorie</h2>
+            <p>Vue globale des quantités physiques, réservées et disponibles par catégorie.</p>
+        </div>
+
+        <div class="table-container">
+            <table class="stock-table">
+                <thead>
+                    <tr>
+                        <th>Catégorie</th>
+                        <th>Qté physique totale</th>
+                        <th>Qté réservée totale</th>
+                        <th>Qté disponible totale</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="cat in categoryStocks" :key="cat.name">
+                        <td><strong>{{ cat.name }}</strong></td>
+
+                        <td>
+                            <span
+                                :class="['qty-badge', cat.quantity > 10 ? 'qty-ok' : (cat.quantity > 0 ? 'qty-low' : 'qty-empty')]">
+                                {{ cat.quantity }}
+                            </span>
+                        </td>
+
+                        <td>
+                            <span class="qty-badge qty-reserved">{{ cat.reserved_quantity }}</span>
+                        </td>
+
+                        <td>
+                            <span
+                                :class="['qty-badge', cat.available_quantity > 10 ? 'qty-ok' : (cat.available_quantity > 0 ? 'qty-low' : 'qty-empty')]">
+                                {{ cat.available_quantity }}
+                            </span>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div v-if="categoryStocks.length === 0 && !loading" class="empty-state">
+                Aucune catégorie trouvée.
+            </div>
+        </div>
     </div>
 </template>
 
@@ -334,10 +406,20 @@ onMounted(loadStockDashboard);
     margin-bottom: 25px;
 }
 
+.mt-40 {
+    margin-top: 40px;
+}
+
 .header-section h1 {
     margin: 0 0 5px 0;
     color: #1e293b;
     font-size: 1.8rem;
+}
+
+.header-section h2 {
+    margin: 0 0 5px 0;
+    color: #1e293b;
+    font-size: 1.5rem;
 }
 
 .header-section p {
