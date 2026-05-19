@@ -5,6 +5,7 @@ import { getProduct } from '@/service/productService';
 import { getCategories } from '@/service/categoryService';
 import StatistiqueVente from '@/components/backoffice/StatistiqueVente.vue';
 import MeilleurProduit from '@/components/backoffice/MeilleurProduit.vue';
+import Loading from '@/components/Loading.vue';
 
 const rawOrders = ref([]);
 const startDate = ref('');
@@ -13,6 +14,7 @@ const aggregationInterval = ref('daily');
 const productInfoById = ref({});
 const categoryNameById = ref({});
 const isRefreshing = ref(false);
+const isLoading = ref(true);
 
 // Remplacement de la fonction fléchée et du ternaire (? :) par des if/else
 function extractText(v) {
@@ -294,79 +296,84 @@ const totalProfit = computed(function () {
 
 // Déclaration de fonction asynchrone classique
 async function fetchData() {
-  const orders = await getOrders({ display: 'full' });
-  rawOrders.value = orders.filter(function (o) {
-    return extractText(o.current_state) !== '6';
-  });
-
-  if (rawOrders.value.length > 0 && !startDate.value) {
-
-    // Remplacement de la fonction fléchée dans le map()
-    const dates = rawOrders.value.map(function (o) {
-      const dateStr = extractText(o.date_add);
-      if (dateStr) {
-        return dateStr.slice(0, 10);
-      }
-      return null;
+  isLoading.value = true;
+  try {
+    const orders = await getOrders({ display: 'full' });
+    rawOrders.value = orders.filter(function (o) {
+      return extractText(o.current_state) !== '6';
     });
 
-    // Remplacement du "filter(Boolean)" par une condition explicite
-    const validDates = dates.filter(function (date) {
-      if (date !== null && date !== '') {
-        return true;
-      } else {
-        return false;
+    if (rawOrders.value.length > 0 && !startDate.value) {
+
+      // Remplacement de la fonction fléchée dans le map()
+      const dates = rawOrders.value.map(function (o) {
+        const dateStr = extractText(o.date_add);
+        if (dateStr) {
+          return dateStr.slice(0, 10);
+        }
+        return null;
+      });
+
+      // Remplacement du "filter(Boolean)" par une condition explicite
+      const validDates = dates.filter(function (date) {
+        if (date !== null && date !== '') {
+          return true;
+        } else {
+          return false;
+        }
+      });
+
+      validDates.sort();
+
+      if (validDates.length > 0) {
+        startDate.value = validDates[0];
+        endDate.value = validDates[validDates.length - 1];
       }
-    });
-
-    validDates.sort();
-
-    if (validDates.length > 0) {
-      startDate.value = validDates[0];
-      endDate.value = validDates[validDates.length - 1];
     }
-  }
 
-  const productIds = {};
-  for (let i = 0; i < rawOrders.value.length; i++) {
-    const rows = getOrderRows(rawOrders.value[i]);
-    for (let j = 0; j < rows.length; j++) {
-      const pid = extractText(rows[j].product_id);
-      if (pid) productIds[pid] = true;
+    const productIds = {};
+    for (let i = 0; i < rawOrders.value.length; i++) {
+      const rows = getOrderRows(rawOrders.value[i]);
+      for (let j = 0; j < rows.length; j++) {
+        const pid = extractText(rows[j].product_id);
+        if (pid) productIds[pid] = true;
+      }
     }
-  }
 
-  const ids = Object.keys(productIds);
-  const infoMap = {};
-  for (let i = 0; i < ids.length; i++) {
-    const pid = ids[i];
+    const ids = Object.keys(productIds);
+    const infoMap = {};
+    for (let i = 0; i < ids.length; i++) {
+      const pid = ids[i];
+      try {
+        const product = await getProduct(pid, 'display=[id,wholesale_price,id_category_default,name]');
+        if (product) {
+          infoMap[pid] = {
+            wholesalePrice: toNumber(extractText(product.wholesale_price)),
+            categoryId: extractText(product.id_category_default) || '0',
+            name: getLanguageText(product.name?.language || product.name)
+          };
+        }
+      } catch (e) {
+        infoMap[pid] = { wholesalePrice: 0, categoryId: '0', name: '' };
+      }
+    }
+    productInfoById.value = infoMap;
+
+    const categoryMap = {};
     try {
-      const product = await getProduct(pid, 'display=[id,wholesale_price,id_category_default,name]');
-      if (product) {
-        infoMap[pid] = {
-          wholesalePrice: toNumber(extractText(product.wholesale_price)),
-          categoryId: extractText(product.id_category_default) || '0',
-          name: getLanguageText(product.name?.language || product.name)
-        };
+      const cats = await getCategories('display=[id,name]');
+      for (let i = 0; i < cats.length; i++) {
+        const catId = extractText(cats[i].id);
+        const catName = getLanguageText(cats[i].name?.language || cats[i].name);
+        if (catId) categoryMap[catId] = catName || 'Sans categorie';
       }
     } catch (e) {
-      infoMap[pid] = { wholesalePrice: 0, categoryId: '0', name: '' };
+      // Keep empty map if categories fail
     }
+    categoryNameById.value = categoryMap;
+  } finally {
+    isLoading.value = false;
   }
-  productInfoById.value = infoMap;
-
-  const categoryMap = {};
-  try {
-    const cats = await getCategories('display=[id,name]');
-    for (let i = 0; i < cats.length; i++) {
-      const catId = extractText(cats[i].id);
-      const catName = getLanguageText(cats[i].name?.language || cats[i].name);
-      if (catId) categoryMap[catId] = catName || 'Sans categorie';
-    }
-  } catch (e) {
-    // Keep empty map if categories fail
-  }
-  categoryNameById.value = categoryMap;
 }
 
 async function handleRefresh() {
@@ -402,44 +409,51 @@ onMounted(fetchData);
       </div>
     </header>
 
-    <div class="main-content">
-      <StatistiqueVente :stats="salesStats" />
-      <MeilleurProduit :produits="topProducts" />
+    <div v-if="isLoading" class="loading-container">
+      <Loading :isLoading="isLoading" />
+      <p>Chargement des statistiques...</p>
     </div>
 
-    <section class="summary-section">
-      <div class="summary-card">
-        <p>Ventes HT</p>
-        <h3>{{ formatMoney(totalSalesHt) }} €</h3>
+    <div v-else>
+      <div class="main-content">
+        <StatistiqueVente :stats="salesStats" />
+        <MeilleurProduit :produits="topProducts" />
       </div>
-      <div class="summary-card">
-        <p>Ventes TTC</p>
-        <h3>{{ formatMoney(totalSalesTtc) }} €</h3>
-      </div>
-      <div class="summary-card">
-        <p>Achats HT</p>
-        <h3>{{ formatMoney(totalPurchaseHt) }} €</h3>
-      </div>
-      <div class="summary-card highlight">
-        <p>Benefice</p>
-        <h3>{{ formatMoney(totalProfit) }} €</h3>
-      </div>
-    </section>
 
-    <section class="category-profit">
-      <h2>Benefice par categorie</h2>
-      <div class="category-list">
-        <div class="category-row" v-for="cat in categoryProfitStats" :key="cat.categoryId">
-          <div class="category-name">{{ cat.categoryName }}</div>
-          <div class="category-values">
-            <span>Ventes HT: {{ formatMoney(cat.totalSalesHt) }} €</span>
-            <span>Ventes TTC: {{ formatMoney(cat.totalSalesTtc) }} €</span>
-            <span>Achats HT: {{ formatMoney(cat.totalPurchaseHt) }} €</span>
-            <span class="profit">Benefice: {{ formatMoney(cat.profit) }} €</span>
+      <section class="summary-section">
+        <div class="summary-card">
+          <p>Ventes HT</p>
+          <h3>{{ formatMoney(totalSalesHt) }} €</h3>
+        </div>
+        <div class="summary-card">
+          <p>Ventes TTC</p>
+          <h3>{{ formatMoney(totalSalesTtc) }} €</h3>
+        </div>
+        <div class="summary-card">
+          <p>Achats HT</p>
+          <h3>{{ formatMoney(totalPurchaseHt) }} €</h3>
+        </div>
+        <div class="summary-card highlight">
+          <p>Benefice</p>
+          <h3>{{ formatMoney(totalProfit) }} €</h3>
+        </div>
+      </section>
+
+      <section class="category-profit">
+        <h2>Benefice par categorie</h2>
+        <div class="category-list">
+          <div class="category-row" v-for="cat in categoryProfitStats" :key="cat.categoryId">
+            <div class="category-name">{{ cat.categoryName }}</div>
+            <div class="category-values">
+              <span>Ventes HT: {{ formatMoney(cat.totalSalesHt) }} €</span>
+              <span>Ventes TTC: {{ formatMoney(cat.totalSalesTtc) }} €</span>
+              <span>Achats HT: {{ formatMoney(cat.totalPurchaseHt) }} €</span>
+              <span class="profit">Benefice: {{ formatMoney(cat.profit) }} €</span>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -584,5 +598,19 @@ onMounted(fetchData);
 .category-values .profit {
   font-weight: 700;
   color: #16a34a;
+}
+
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px;
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+  color: #64748b;
+  font-weight: 500;
+  gap: 15px;
 }
 </style>
