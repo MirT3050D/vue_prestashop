@@ -38,6 +38,12 @@
       <!-- Card 4: Image Import -->
       <div class="upload-card">
         <h2>4. Import d'Images</h2>
+        <p>
+          Ne pas importer les image
+        </p>
+
+        <input type="checkbox" v-model="checkbox">
+        {{ checkbox }}
         <p>Format: .zip contenant les images (ex: REF123.jpg, REF123_1.png)</p>
         <div class="upload-section">
           <input type="file" accept=".zip" @change="(e) => onFileChange(e, 'image')" :disabled="isImportingAll"
@@ -65,11 +71,12 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { ref, vModelCheckbox } from 'vue';
 import Papa from 'papaparse';
 import { processProductImport, processVariantImport, processOrderImport } from '@/service/import';
 import { processImageImport } from '@/service/imageImport';
 
+const checkbox = ref(false);
 const fileProduct = ref(null);
 const fileVariant = ref(null);
 const fileOrder = ref(null);
@@ -143,14 +150,19 @@ const startAllImports = async () => {
       addLog('info', 'Pas de fichier Commandes fourni — ignoré.');
     }
 
-    // 4. Image (zip)
-    if (fileImage.value) {
-      addLog('info', 'Import Images (zip) — début...');
-      await processImageImport(fileImage.value, addLog);
-    } else {
-      addLog('info', 'Pas de fichier Images fourni — ignoré.');
-    }
+    if (checkbox.value == false) {
+      // 4. Image (zip)
+      if (fileImage.value) {
+        addLog('info', 'Import Images (zip) — début...');
+        await processImageImport(fileImage.value, addLog);
+      } else {
+        addLog('info', 'Pas de fichier Images fourni — ignoré.');
+      }
 
+    }
+    else {
+      addLog('info', 'image non importé');
+    }
     addLog('success', 'Import global terminé.');
   } catch (e) {
     addLog('error', `Erreur lors de l'import global : ${e.message}`);
