@@ -1,4 +1,4 @@
-import { getXml, postImage } from '@/service/api';
+import { getXml, postImage, formatApiError } from '@/service/api';
 import { runResetForTargets } from '@/service/resetService';
 import { resetTargets } from '@/service/resetTargets';
 import JSZip from 'jszip';
@@ -75,22 +75,22 @@ export const processImageImport = async (zipFile, logCallback) => {
                 logCallback('success', `Image "${filename}" importée avec succès pour le produit ID ${productId}.`);
 
             } catch (error) {
-                const apiError = error.response?.data || error.message;
-                logCallback('error', `Erreur pour l'image "${filename}" (Ref: ${productRef}): ${error.message}`);
-                if (apiError && typeof apiError === 'string' && apiError.length < 500) {
-                    logCallback('error', `Détails API: ${apiError}`);
-                }
+                console.error(`Erreur pour l'image "${filename}" (Ref: ${productRef}):`, error);
+                logCallback('error', `Erreur pour l'image "${filename}" (Ref: ${productRef}) : ${formatApiError(error)}`);
             }
+            await new Promise(resolve => setTimeout(resolve, 500));
         }
         logCallback('success', 'Import des images terminé.');
 
     } catch (error) {
-        logCallback('error', `Erreur lors de la lecture du fichier ZIP : ${error.message}`);
+        console.error('Erreur lors de la lecture du fichier ZIP / import des images:', error);
+        logCallback('error', `Erreur lors du traitement du ZIP / import des images : ${formatApiError(error)}`);
         // Rollback global en cas d'erreur critique pendant l'import d'images
         try {
             await runResetForTargets(resetTargets, (type, message) => logCallback(type, `Rollback global: ${message}`));
         } catch (e) {
-            logCallback('warn', `Échec du rollback global : ${e?.message ?? e}`);
+            console.error('Échec du rollback global:', e);
+            logCallback('warn', `Échec du rollback global : ${formatApiError(e)}`);
         }
     }
 };

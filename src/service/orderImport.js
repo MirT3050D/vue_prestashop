@@ -1,4 +1,4 @@
-import { getXml, postXml, putXml, deleteXml, getPrestaShopConfig } from '@/service/api';
+import { getXml, postXml, putXml, deleteXml, getPrestaShopConfig, formatApiError } from '@/service/api';
 import { runResetForTargets } from '@/service/resetService';
 import { resetTargets } from '@/service/resetTargets';
 import { getProductTaxRate } from '@/service/price';
@@ -69,15 +69,6 @@ function getLangText(field) {
     return field.language['#text'];
 }
 
-function formatApiError(error) {
-    let msg = error.message;
-    if (error.response?.data) {
-        const dataStr = typeof error.response.data === 'object' ? JSON.stringify(error.response.data) : String(error.response.data);
-        msg += ` | Détail API : ${dataStr.replace(/\n/g, '').substring(0, 500)}`;
-    }
-    return msg;
-}
-
 // ============================================================================
 // TRACER LE MOUVEMENT SANS TOUCHER AU STOCK PHYSIQUE
 // ============================================================================
@@ -141,7 +132,8 @@ async function logOrderMovement(pId, attributeId, quantity, orderId, employeeId,
                 }
             }
         } catch (e) {
-            if (logCallback) logCallback('warn', `Impossible de lire les mouvements existants pour vérification: ${e?.message ?? e}`);
+            console.error('Impossible de lire les mouvements existants:', e);
+            if (logCallback) logCallback('warn', `Impossible de lire les mouvements existants pour vérification: ${formatApiError(e)}`);
             // en cas d'erreur sur la lecture des mouvements, continuer et tenter d'en créer un nouveau
         }
 
@@ -183,6 +175,7 @@ async function logOrderMovement(pId, attributeId, quantity, orderId, employeeId,
 
         if (logCallback) logCallback('success', `📦 Mouvement tracé dans l'historique pour le produit ${pId} (-${quantity}). id:${createdId || 'unknown'}`);
     } catch (e) {
+        console.error('Impossible de tracer le mouvement:', e);
         if (logCallback) logCallback('warn', `⚠️ Impossible de tracer le mouvement : ${formatApiError(e)}`);
     }
 }
@@ -215,6 +208,7 @@ async function forceOrderState(orderId, stateId, logCallback, options = {}) {
         await postXml(useCustomEndpoint ? '/custom_order_state' : '/order_histories', payload);
         if (logCallback) logCallback('info', `✅ État de la commande #${orderId} forcé au statut ${stateId}.`);
     } catch (error) {
+        console.error("Impossible de forcer l'état de la commande:", error);
         if (logCallback) logCallback('warn', `⚠️ Impossible de forcer l'état de la commande : ${formatApiError(error)}`);
     }
 }
@@ -278,7 +272,17 @@ export const processOrderImport = async (data, logCallback) => {
             let cartTotalTtc = 0;
             const linesToDecrement = [];
 
+            const mergedAchats = [];
             for (const achat of achats) {
+                const existing = mergedAchats.find(a => a.reference === achat.reference && a.variante === achat.variante);
+                if (existing) {
+                    existing.quantite += achat.quantite;
+                } else {
+                    mergedAchats.push({ ...achat });
+                }
+            }
+
+            for (const achat of mergedAchats) {
                 const prodSearch = await getXml(`/products?filter[reference]=[${achat.reference}]&display=[id,price,name]`);
                 let prod = prodSearch?.prestashop?.products?.product;
                 if (!prod) continue;
@@ -335,6 +339,11 @@ export const processOrderImport = async (data, logCallback) => {
             const newCartResp = await postXml('/carts', cartPayload);
             const cartId = extractId(newCartResp?.prestashop?.cart?.id);
 
+            if (!cartId) {
+                if (logCallback) logCallback('error', `Erreur critique: Impossible de récupérer l'ID du panier pour la ligne ${index + 1}.`);
+                continue;
+            }
+
             if (!etatRaw || etatRaw === '') { logCallback('warn', `Ligne ${index + 1} : Panier Abandonné #${cartId} conservé.`); continue; }
 
             const orderStateId = resolveOrderStateId(etatRaw);
@@ -358,6 +367,7 @@ export const processOrderImport = async (data, logCallback) => {
                     await putXml(`/orders/${orderId}`, putPayload);
                     if (logCallback) logCallback('info', `📅 Date de la commande #${orderId} mise à jour avec succès vers ${formattedDate}.`);
                 } catch (dateErr) {
+                    console.error(`Impossible de mettre à jour la date historique de la commande #${orderId}:`, dateErr);
                     if (logCallback) logCallback('warn', `⚠️ Impossible de mettre à jour la date historique de la commande #${orderId}: ${formatApiError(dateErr)}`);
                 }
 
@@ -379,15 +389,18 @@ export const processOrderImport = async (data, logCallback) => {
                 logCallback('error', `Échec de création de la commande à la ligne ${index + 1}. Suppression du panier fantôme.`);
                 try { await deleteXml(`/carts/${cartId}`); } catch (delErr) { logCallback('warn', `Impossible de supprimer le panier fantôme ${cartId}`); }
             }
+            await new Promise(resolve => setTimeout(resolve, 500));
         }
         logCallback('success', 'Importation terminée !');
     } catch (error) {
+        console.error('Erreur critique lors de l\'import des commandes:', error);
         logCallback('error', `Erreur critique : ${formatApiError(error)}`);
         // Rollback global (tous les imports) en cas d'erreur critique durant l'import des commandes
         try {
             await runResetForTargets(resetTargets, (type, message) => logCallback(type, `Rollback global: ${message}`));
         } catch (e) {
-            logCallback('warn', `Échec du rollback global : ${e?.message ?? e}`);
+            console.error('Échec du rollback global:', e);
+            logCallback('warn', `Échec du rollback global : ${formatApiError(e)}`);
         }
     }
 };

@@ -293,6 +293,8 @@ const startAllImports = async () => {
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.05);
   font-size: 0.9rem;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .info {

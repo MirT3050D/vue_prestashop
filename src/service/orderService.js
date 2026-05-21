@@ -114,3 +114,52 @@ export async function updateOrderStatusByHistory(orderId, newStateId) {
     return await updateOrderStatus(orderId, newStateId);
 }
 
+/**
+ * Parse les order states et construit les maps de noms et couleurs.
+ * @param {Array} statesData - Les données brutes des order states
+ * @returns {{ nameMap: Map, colorMap: Map, idByNameLower: Map }}
+ */
+export function parseOrderStates(statesData) {
+    const nameMap = new Map();
+    const colorMap = new Map();
+    const idByNameLower = new Map();
+
+    for (let i = 0; i < statesData.length; i++) {
+        const state = statesData[i];
+        const langNode = state.name?.language;
+        let stateText = '';
+        if (Array.isArray(langNode)) {
+            stateText = langNode[0]['#text'] || '';
+        } else if (langNode && typeof langNode === 'object') {
+            stateText = langNode['#text'] || '';
+        } else if (typeof langNode === 'string') {
+            stateText = langNode;
+        }
+
+        const idKey = typeof state.id === 'object' ? String(state.id['#text'] ?? state.id) : String(state.id ?? '');
+        nameMap.set(idKey, stateText);
+        colorMap.set(idKey, state.color);
+        idByNameLower.set(stateText.toLowerCase(), idKey);
+    }
+
+    return { nameMap, colorMap, idByNameLower };
+}
+
+/**
+ * Récupère le nom d'un état de commande.
+ */
+export function getStateName(stateId, nameMap) {
+    if (stateId === 'dans_le_panier') return 'Dans le panier';
+    const idKey = typeof stateId === 'object' ? String(stateId['#text'] ?? stateId) : String(stateId ?? '');
+    return nameMap.get(idKey) || 'Inconnu';
+}
+
+/**
+ * Récupère la couleur d'un état de commande.
+ */
+export function getStateColor(stateId, colorMap) {
+    if (stateId === 'dans_le_panier') return '#94a3b8';
+    const idKey = typeof stateId === 'object' ? String(stateId['#text'] ?? stateId) : String(stateId ?? '');
+    return colorMap.get(idKey) || '#cccccc';
+}
+

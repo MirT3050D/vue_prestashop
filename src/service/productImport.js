@@ -1,4 +1,4 @@
-import { getXml, postXml, putXml } from '@/service/api';
+import { getXml, postXml, putXml, formatApiError } from '@/service/api';
 import { runResetForTargets } from '@/service/resetService';
 import { resetTargets } from '@/service/resetTargets';
 
@@ -225,7 +225,8 @@ export const processProductImport = async (data, logCallback) => {
             try {
               taxRulesGroupId = await createTaxAndGroup(taxRate, logCallback);
             } catch (createError) {
-              logCallback('error', `Echec creation groupe taxe ${taxRate}%: ${createError.message}`);
+              console.error(`Echec creation groupe taxe ${taxRate}%:`, createError);
+              logCallback('error', `Echec creation groupe taxe ${taxRate}%: ${formatApiError(createError)}`);
               taxRulesGroupId = '0';
             }
           }
@@ -281,7 +282,8 @@ export const processProductImport = async (data, logCallback) => {
             }
             categoryCache[catName] = categoryId;
           } catch (catError) {
-            logCallback('error', `Erreur avec la catégorie "${catName}".`);
+            console.error(`Erreur avec la catégorie "${catName}":`, catError);
+            logCallback('error', `Erreur avec la catégorie "${catName}" : ${formatApiError(catError)}`);
             throw catError;
           }
         }
@@ -349,17 +351,25 @@ export const processProductImport = async (data, logCallback) => {
             logCallback('success', `Date de disponibilité mise à jour avec succès !`);
           }
         } catch (dateError) {
-          logCallback('error', `Échec du PUT pour la date : ${dateError.message}`);
+          console.error(`Échec du PUT pour la date du produit ${productId}:`, dateError);
+          logCallback('error', `Échec du PUT pour la date : ${formatApiError(dateError)}`);
         }
       }
 
       logCallback('success', `Ligne ${index + 1} (${row.nom}) importée avec succès.`);
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
 
     logCallback('success', 'Import des produits terminé avec succès !');
   } catch (error) {
-    logCallback('error', `Erreur lors de l'import : ${error.message}`);
+    console.error('Erreur lors de l\'import des produits:', error);
+    logCallback('error', `Erreur lors de l'import : ${formatApiError(error)}`);
     logCallback('error', 'Annulation de l\'opération et lancement de la réinitialisation (Rollback)...');
-    await rollbackProducts(logCallback);
+    try {
+      await rollbackProducts(logCallback);
+    } catch (rollbackErr) {
+      console.error('Échec du rollback des produits:', rollbackErr);
+      logCallback('error', `Échec du rollback : ${formatApiError(rollbackErr)}`);
+    }
   }
 };

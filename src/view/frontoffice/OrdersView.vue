@@ -1,127 +1,61 @@
 <script setup>
-import { computed, customRef, onMounted, ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import Loading from '@/components/Loading.vue';
-import { getCustomerOrders, getOrderStates } from '@/service/orderService';
+import { getCustomerOrders, getOrderStates, parseOrderStates, getStateName, getStateColor } from '@/service/orderService';
+import { extractText, formatDate } from '@/service/prestashopUtils';
+import { getCurrentCustomer } from '@/service/authService';
 
 const customer = ref(null);
 const orders = ref([]);
-const orderStates = ref([]);
+const stateNameMap = ref(new Map());
+const stateColorMap = ref(new Map());
 const isLoading = ref(true);
 const error = ref('');
 
-function extractText(value) {
-    if (value === null || value === undefined) return '';
-    if (typeof value === 'object') {
-        if (typeof value['#text'] !== 'undefined') return String(value['#text']);
-        if (typeof value['@_id'] !== 'undefined') return String(value['@_id']);
-        return '';
-    }
-    return String(value);
-}
-
-function loadCustomer() {
-    const data = localStorage.getItem('customer');
-    if (!data) {
-        customer.value = null;
-        return;
-    }
-
-    try {
-        customer.value = JSON.parse(data);
-    } catch (e) {
-        customer.value = null;
-    }
-}
-
-function formatDate(value) {
-    const raw = extractText(value);
-    if (!raw) return 'Date inconnue';
-
-    const date = new Date(raw.replace(' ', 'T'));
-    if (Number.isNaN(date.getTime())) return raw;
-
-    return date.toLocaleDateString('fr-FR', {
-        year: 'numeric',
-        month: 'long',
-        day: '2-digit'
-    });
-}
-
-const stateLabels = computed(() => {
-    const labels = new Map();
-
-    for (const state of orderStates.value) {
-        const langNode = state?.name?.language;
-        let label = '';
-
-        if (Array.isArray(langNode)) {
-            label = extractText(langNode[0]);
-        } else {
-            label = extractText(langNode);
-        }
-
-        labels.set(String(extractText(state.id)), label || 'Inconnu');
-    }
-
-    return labels;
-});
-
-const stateColors = computed(() => {
-    const colors = new Map();
-
-    for (const state of orderStates.value) {
-        colors.set(String(extractText(state.id)), state.color || '#9ca3af');
-    }
-
-    return colors;
-});
-
 function getOrderStateLabel(stateId) {
-    return stateLabels.value.get(String(extractText(stateId))) || 'Inconnu';
+    return getStateName(stateId, stateNameMap.value);
 }
 
 function getOrderStateColor(stateId) {
-    return stateColors.value.get(String(extractText(stateId))) || '#9ca3af';
+    return getStateColor(stateId, stateColorMap.value);
 }
-
 
 async function loadData() {
     isLoading.value = true;
     error.value = '';
 
-    loadCustomer();
+    customer.value = getCurrentCustomer();
 
     if (!customer.value || Number(customer.value.id) === 1) {
         isLoading.value = false;
         return null;
     }
-    else {
 
+    if (!customer.value || !customer.value.id) {
+        orders.value = [];
+        isLoading.value = false;
+        return;
+    }
 
+    try {
+        const [ordersData, statesData] = await Promise.all([
+            getCustomerOrders(customer.value.id),
+            getOrderStates()
+        ]);
 
-        if (!customer.value || !customer.value.id) {
-            orders.value = [];
-            isLoading.value = false;
-            return;
-        }
+        orders.value = ordersData
+            .slice()
+            .sort((a, b) => Number(extractText(b.id)) - Number(extractText(a.id)));
 
-        try {
-            const [ordersData, statesData] = await Promise.all([
-                getCustomerOrders(customer.value.id),
-                getOrderStates()
-            ]);
-
-            orders.value = ordersData
-                .slice()
-                .sort((a, b) => Number(extractText(b.id)) - Number(extractText(a.id)));
-            orderStates.value = statesData;
-        } catch (e) {
-            console.error("Error loading orders:", e);
-            error.value = 'Impossible de charger vos commandes pour le moment.';
-        } finally {
-            isLoading.value = false;
-        }
+        const parsed = parseOrderStates(statesData);
+        stateNameMap.value = parsed.nameMap;
+        stateColorMap.value = parsed.colorMap;
+    } catch (e) {
+        console.error("Error loading orders:", e);
+        error.value = 'Impossible de charger vos commandes pour le moment.';
+    } finally {
+        isLoading.value = false;
     }
 }
 

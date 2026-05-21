@@ -1,13 +1,13 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue';
 import { Icon } from '@iconify/vue';
-import { getImage, getPrestaShopConfig, getXml, postXml, putXml } from '@/service/api';
-import { calculateTtc, getProductTaxRate } from '@/service/price';
-import { getProduct } from '@/service/productService';
+import { calculateTtc } from '@/service/price';
 import { getCustomerAddresses, createAddress } from '@/service/addressService';
 import { createCart } from '@/service/cartService';
 import { createOrder, getOrderStates, updateOrderStatusByHistory, getOrder } from '@/service/orderService';
-import { getStockAvailables } from '@/service/stockService';
+import { extractText } from '@/service/prestashopUtils';
+import { getCartStorageKey, enrichCartItem, getItemStock } from '@/service/cartLocalService';
+import { findCodStateId, decrementStock, buildAddressXml, buildCartXml, buildOrderXml } from '@/service/checkoutService';
 import { useRouter } from 'vue-router';
 
 const router = useRouter();
@@ -22,101 +22,8 @@ const codStateId = ref(2); // 2 = Paid / Paiement accepté
 const panier = ref([]);
 const customer = ref(null);
 
-function getCartStorageKey() {
-    const customerJson = localStorage.getItem('customer');
-    if (customerJson) {
-        try {
-            const customerData = JSON.parse(customerJson);
-            if (customerData?.id) return `panier_${customerData.id}`;
-        } catch (e) {
-            console.error("Erreur parse customer:", e);
-        }
-    }
-    return 'panier_guest';
-}
-
-async function enrichCartItem(item) {
-    let taxRate = item.taxRate;
-    let image = item.image || null;
-    let price = item.price;
-    let name = item.name;
-    let reference = item.reference;
-
-    if (taxRate == null) {
-        taxRate = await getProductTaxRate(item.id_product);
-    }
-
-    try {
-        const product = await getProduct(item.id_product);
-        if (product) {
-            price = Number(extractText(product.price)) || 0;
-            const nameNode = product.name?.language;
-            const text = Array.isArray(nameNode) ? nameNode[0]['#text'] : (nameNode?.['#text'] || nameNode);
-            name = extractText(text) || 'Produit sans nom';
-            reference = extractText(product.reference) || '';
-
-            if (product.id_default_image) {
-                let imgId = product.id_default_image;
-                if (typeof imgId === 'object' && imgId['#text']) imgId = imgId['#text'];
-                if (typeof imgId === 'object' && imgId['@_xlink:href']) {
-                    imgId = imgId['@_xlink:href'].split('/').pop();
-                }
-                const path = `images/products/${item.id_product}/${imgId}`;
-                image = await getImage(path);
-            }
-        }
-    } catch (e) { }
-
-    return {
-        ...item,
-        name: name || `Produit #${item.id_product}`,
-        price: price || 0,
-        reference: reference || '',
-        taxRate: Number(taxRate) || 0,
-        image
-    };
-}
-
-function extractText(value) {
-    if (value === null || value === undefined) return '';
-    if (typeof value === 'object') {
-        if (typeof value['#text'] !== 'undefined') return String(value['#text']);
-        return '';
-    }
-    return String(value);
-}
-
 function normalizeFormText(value) {
     return extractText(value).trim();
-}
-
-async function getItemStock(item) {
-    const productId = extractText(item?.id_product);
-    const attributeId = extractText(item?.id_product_attribute) || '0';
-    if (!productId) return 0;
-
-    const stockData = await getStockAvailables(`filter[id_product]=[${productId}]&filter[id_product_attribute]=[${attributeId}]&display=[quantity]`);
-    if (stockData && stockData.length > 0) {
-        return parseInt(extractText(stockData[0].quantity), 10) || 0;
-    }
-
-    return 0;
-}
-
-async function validateCartStock() {
-    for (let i = 0; i < panier.value.length; i++) {
-        const item = panier.value[i];
-        const available = await getItemStock(item);
-        const requested = Number(item.quantity) || 0;
-
-        if (requested > available) {
-            const name = item.name || `Produit #${item.id_product}`;
-            error.value = `Stock insuffisant pour ${name}. Disponible: ${available}, dans le panier: ${requested}.`;
-            return false;
-        }
-    }
-
-    return true;
 }
 
 // ===== Formulaire livraison =====
@@ -148,112 +55,8 @@ const totalPanierHt = computed(() => {
     return total.toFixed(6);
 });
 
-async function findCodStateId() {
-    try {
-        const config = await getPrestaShopConfig('PS_OS_COD_VALIDATION');
-        const configuredStateId = Number(extractText(config?.value));
-        if (configuredStateId > 0) {
-            codStateId.value = configuredStateId;
-            return;
-        }
-
-        const states = await getOrderStates();
-        if (!states) return;
-
-        for (let i = 0; i < states.length; i++) {
-            const moduleName = extractText(states[i].module_name).toLowerCase();
-            if (moduleName === 'ps_cashondelivery') {
-                codStateId.value = Number(extractText(states[i].id));
-                return;
-            }
-
-            const langNode = states[i].name?.language;
-            const langNodes = Array.isArray(langNode) ? langNode : (langNode ? [langNode] : []);
-            const hasCodLabel = langNodes.some((node) => {
-                const name = extractText(node).toLowerCase();
-                return name.includes('cash on delivery') || name.includes('paiement a la livraison') || name.includes('paiement à la livraison') || name.includes('cashondelivery');
-            });
-
-            if (hasCodLabel) {
-                codStateId.value = Number(extractText(states[i].id));
-                return;
-            }
-        }
-    } catch (e) {
-        console.log('Could not fetch order states for COD lookup:', e);
-    }
-}
-
-// ============================================================================
-// LOGIQUE DE DÉCRÉMENTATION DE STOCK (Avec Hack pour StockEvolution.vue)
-// ============================================================================
-async function forceUpdateStockAvailable(stockAvailable, newQty) {
-    const stId = extractText(stockAvailable.id);
-    const stProductId = extractText(stockAvailable.id_product);
-    let stAttrId = extractText(stockAvailable.id_product_attribute);
-    if (stAttrId === '') stAttrId = '0';
-
-    const stShop = extractText(stockAvailable.id_shop) || '1';
-    const stShopGroup = extractText(stockAvailable.id_shop_group) || '0';
-    const stDepends = extractText(stockAvailable.depends_on_stock) || '0';
-    const stOutOfStock = extractText(stockAvailable.out_of_stock) || '2';
-    const stLocation = (typeof stockAvailable.location === 'object' ? '' : stockAvailable.location) || '';
-
-    const stockXml = `<?xml version="1.0" encoding="UTF-8"?>
-    <prestashop><stock_available>
-        <id><![CDATA[${stId}]]></id>
-        <id_product><![CDATA[${stProductId}]]></id_product>
-        <id_product_attribute><![CDATA[${stAttrId}]]></id_product_attribute>
-        <id_shop><![CDATA[${stShop}]]></id_shop>
-        <id_shop_group><![CDATA[${stShopGroup}]]></id_shop_group>
-        <quantity><![CDATA[${newQty}]]></quantity>
-        <depends_on_stock><![CDATA[${stDepends}]]></depends_on_stock>
-        <out_of_stock><![CDATA[${stOutOfStock}]]></out_of_stock>
-        <location><![CDATA[${stLocation}]]></location>
-    </stock_available></prestashop>`;
-
-    await putXml(`/stock_availables/${stId}`, stockXml);
-}
-
-async function decrementStock(pId, attributeId, quantity, orderId) {
-    try {
-        const attrFilter = attributeId ? attributeId : 0;
-        const stockSearch = await getXml(`/stock_availables?filter[id_product]=[${pId}]&filter[id_product_attribute]=[${attrFilter}]&display=full`);
-        let stockAvailable = stockSearch?.prestashop?.stock_availables?.stock_available;
-
-        if (stockAvailable) {
-            if (Array.isArray(stockAvailable)) stockAvailable = stockAvailable[0];
-            const oldQty = parseInt(extractText(stockAvailable.quantity), 10) || 0;
-            const newQty = oldQty - quantity;
-
-            await forceUpdateStockAvailable(stockAvailable, newQty);
-
-            const dateAdd = new Date().toISOString().slice(0, 19).replace('T', ' ');
-
-            // CORRECTION ICI : On utilise id_order et id_supply_order pour que StockEvolution.vue affiche le bon nom !
-            const baseXml = `
-                <id_order><![CDATA[${pId}]]></id_order>
-                <id_supply_order><![CDATA[${attrFilter}]]></id_supply_order>
-                <id_employee><![CDATA[1]]></id_employee>
-                <id_stock><![CDATA[0]]></id_stock>
-                <id_stock_mvt_reason><![CDATA[3]]></id_stock_mvt_reason>
-                <physical_quantity><![CDATA[${quantity}]]></physical_quantity>
-                <sign><![CDATA[0]]></sign>
-                <price_te><![CDATA[0.000000]]></price_te>
-                <date_add><![CDATA[${dateAdd}]]></date_add>
-            `;
-            await postXml('/stock_movements', `<?xml version="1.0" encoding="UTF-8"?>\n<prestashop><stock_mvt>${baseXml}</stock_mvt></prestashop>`);
-        }
-    } catch (e) {
-        console.warn(`[checkout] Erreur décrémentation: ${e.message}`);
-    }
-}
-
 // ===== Chargement initial =====
 onMounted(async () => {
-    // Direct payment, no need to lookup COD state ID
-    // await findCodStateId();
-
     const storageKey = getCartStorageKey();
     const cartJson = localStorage.getItem(storageKey);
     if (cartJson) {
@@ -326,8 +129,17 @@ async function passerCommande() {
     error.value = validerFormulaire();
     if (error.value) return;
 
-    const stockOk = await validateCartStock();
-    if (!stockOk) return;
+    // Validate stock
+    for (let i = 0; i < panier.value.length; i++) {
+        const item = panier.value[i];
+        const available = await getItemStock(item.id_product, item.id_product_attribute);
+        const requested = Number(item.quantity) || 0;
+        if (requested > available) {
+            const name = item.name || `Produit #${item.id_product}`;
+            error.value = `Stock insuffisant pour ${name}. Disponible: ${available}, dans le panier: ${requested}.`;
+            return;
+        }
+    }
 
     loading.value = true;
     error.value = '';
@@ -341,20 +153,7 @@ async function passerCommande() {
         } catch (e) { }
 
         if (!idAdresse) {
-            let adresseXml = `<?xml version="1.0" encoding="UTF-8"?>
-<prestashop>
-  <address>
-    <id_customer>${customer.value.id}</id_customer>
-    <id_country>8</id_country>
-    <alias>${form.value.alias}</alias>
-    <firstname>${form.value.firstname}</firstname>
-    <lastname>${form.value.lastname}</lastname>
-    <address1>${form.value.address1}</address1>
-    <postcode>${form.value.postcode}</postcode>
-    <city>${form.value.city}</city>
-    <phone>${form.value.phone}</phone>
-  </address>
-</prestashop>`;
+            const adresseXml = buildAddressXml(customer.value.id, form.value);
             let adresseResp = await createAddress(adresseXml);
             idAdresse = adresseResp?.id || 0;
         }
@@ -365,52 +164,7 @@ async function passerCommande() {
             return;
         }
 
-        let cartRowsXml = '';
-        let orderRowsXml = '';
-        let cartTotal = 0;
-
-        for (let i = 0; i < panier.value.length; i++) {
-            let item = panier.value[i];
-
-            const basePriceHt = Number(item.price || 0);
-            const lineTotal = basePriceHt * item.quantity;
-            cartTotal += lineTotal;
-
-            cartRowsXml += `
-      <cart_row>
-        <id_product>${item.id_product}</id_product>
-        <id_product_attribute>${item.id_product_attribute || 0}</id_product_attribute>
-        <id_address_delivery>${idAdresse}</id_address_delivery>
-        <quantity>${item.quantity}</quantity>
-      </cart_row>`;
-
-            orderRowsXml += `
-        <order_row>
-          <product_id>${item.id_product}</product_id>
-          <product_attribute_id>${item.id_product_attribute || 0}</product_attribute_id>
-          <product_quantity>${item.quantity}</product_quantity>
-          <product_name><![CDATA[${item.name}]]></product_name>
-          <product_reference><![CDATA[${item.reference || ''}]]></product_reference>
-          <product_price>${basePriceHt.toFixed(6)}</product_price>
-          <unit_price_tax_incl>${basePriceHt.toFixed(6)}</unit_price_tax_incl>
-          <unit_price_tax_excl>${basePriceHt.toFixed(6)}</unit_price_tax_excl>
-        </order_row>`;
-        }
-
-        let cartXml = `<?xml version="1.0" encoding="UTF-8"?>
-<prestashop>
-  <cart>
-    <id_currency>1</id_currency>
-    <id_lang>1</id_lang>
-    <id_customer>${customer.value.id}</id_customer>
-    <id_address_delivery>${idAdresse}</id_address_delivery>
-    <id_address_invoice>${idAdresse}</id_address_invoice>
-    <associations>
-      <cart_rows>${cartRowsXml}</cart_rows>
-    </associations>
-  </cart>
-</prestashop>`;
-
+        const cartXml = buildCartXml(customer.value.id, idAdresse, panier.value);
         let cartResp = await createCart(cartXml);
         let idCart = cartResp?.id || 0;
 
@@ -420,44 +174,12 @@ async function passerCommande() {
             return;
         }
 
-        const secureKey = Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+        let cartTotal = 0;
+        for (let i = 0; i < panier.value.length; i++) {
+            cartTotal += Number(panier.value[i].price || 0) * panier.value[i].quantity;
+        }
 
-        let orderXml = `<?xml version="1.0" encoding="UTF-8"?>
-<prestashop>
-  <order>
-    <id_cart>${idCart}</id_cart>
-    <id_customer>${customer.value.id}</id_customer>
-    <id_address_delivery>${idAdresse}</id_address_delivery>
-    <id_address_invoice>${idAdresse}</id_address_invoice>
-    <id_carrier>1</id_carrier>
-    <id_currency>1</id_currency>
-    <id_lang>1</id_lang>
-        <id_shop>1</id_shop>
-        <id_shop_group>1</id_shop_group>
-        <module>ps_checkout</module>
-        <secure_key>${secureKey}</secure_key>
-    <payment>Paiement accepté / En ligne</payment>
-        <total_paid>${cartTotal.toFixed(6)}</total_paid>
-        <total_paid_real>${cartTotal.toFixed(6)}</total_paid_real>
-        <total_products>${cartTotal.toFixed(6)}</total_products>
-        <total_products_wt>${cartTotal.toFixed(6)}</total_products_wt>
-        <total_shipping>0.000000</total_shipping>
-        <total_shipping_tax_excl>0.000000</total_shipping_tax_excl>
-        <total_shipping_tax_incl>0.000000</total_shipping_tax_incl>
-        <total_discounts>0.000000</total_discounts>
-        <total_discounts_tax_excl>0.000000</total_discounts_tax_excl>
-        <total_discounts_tax_incl>0.000000</total_discounts_tax_incl>
-        <total_wrapping>0.000000</total_wrapping>
-        <total_wrapping_tax_excl>0.000000</total_wrapping_tax_excl>
-        <total_wrapping_tax_incl>0.000000</total_wrapping_tax_incl>
-        <conversion_rate>1.000000</conversion_rate>
-        <current_state>${codStateId.value}</current_state>
-        <associations>
-            <order_rows>${orderRowsXml}</order_rows>
-        </associations>
-  </order>
-</prestashop>`;
-
+        const orderXml = buildOrderXml(idCart, customer.value.id, idAdresse, panier.value, codStateId.value, cartTotal);
         let orderResp = await createOrder(orderXml);
         if (orderResp) {
             idOrder.value = extractText(orderResp.id) || '?';
@@ -488,6 +210,7 @@ async function passerCommande() {
     }
 }
 </script>
+
 
 <template>
     <div class="checkout-view">

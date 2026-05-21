@@ -4,7 +4,9 @@ import { getProducts } from '@/service/productService';
 import { getStockAvailables, updateProductStock } from '@/service/stockService';
 import { getOrders } from '@/service/orderService';
 import { getCategories } from '@/service/categoryService';
-import { getXml, postXml } from '@/service/api';
+import { getXml } from '@/service/api';
+import { extractId, getLangText, getCategoryName } from '@/service/prestashopUtils';
+import { createStockMovement } from '@/service/stockMovementService';
 import Loading from '@/components/Loading.vue';
 
 // ============================================================================
@@ -17,25 +19,8 @@ const message = ref('');
 const messageType = ref('');
 
 // ============================================================================
-// UTILITAIRES
+// UTILITAIRES UI
 // ============================================================================
-function extractId(node) {
-    if (!node) return '0';
-    if (typeof node === 'object') return String(node['#text'] || node['@_id'] || node.id || '0');
-    return String(node);
-}
-
-function getLangText(field) {
-    if (!field || !field.language) return 'Produit inconnu';
-    if (Array.isArray(field.language)) return field.language[0]['#text'];
-    return field.language['#text'];
-}
-
-function getCategoryName(categoryId, categoryMap) {
-    if (!categoryId) return 'Sans categorie';
-    return categoryMap[categoryId] || 'Sans categorie';
-}
-
 function triggerBanner(msg, type) {
     message.value = msg;
     messageType.value = type;
@@ -197,24 +182,7 @@ async function handleSaveStock(item) {
         if (diff !== 0) {
             const sign = diff > 0 ? 1 : -1;
             const reasonId = diff > 0 ? 11 : 12; // 11=Ajustement Positif, 12=Ajustement Négatif
-            const dateAdd = new Date().toISOString().slice(0, 19).replace('T', ' ');
-
-            const mvtXml = `<?xml version="1.0" encoding="UTF-8"?>
-            <prestashop>
-                <stock_mvt>
-                    <id_order><![CDATA[${item.id_product}]]></id_order>
-                    <id_supply_order><![CDATA[${item.id_product_attribute}]]></id_supply_order>
-                    <id_employee><![CDATA[1]]></id_employee>
-                    <id_stock><![CDATA[0]]></id_stock>
-                    <id_stock_mvt_reason><![CDATA[${reasonId}]]></id_stock_mvt_reason>
-                    <physical_quantity><![CDATA[${Math.abs(diff)}]]></physical_quantity>
-                    <sign><![CDATA[${sign}]]></sign>
-                    <price_te><![CDATA[0.000000]]></price_te>
-                    <date_add><![CDATA[${dateAdd}]]></date_add>
-                </stock_mvt>
-            </prestashop>`;
-
-            await postXml('/stock_movements', mvtXml);
+            await createStockMovement(item.id_product, item.id_product_attribute, Math.abs(diff), sign, reasonId);
         }
 
         item.quantity = item.editable_quantity;

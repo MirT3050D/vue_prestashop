@@ -2,40 +2,28 @@
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import LoginForm from '@/components/LoginForm.vue';
+import { initDefaultCredentials, authenticateBackoffice } from '@/service/authService';
 
 const router = useRouter();
 const loading = ref(false);
 const error = ref('');
 
 onMounted(() => {
-    // Initialisation des identifiants par défaut dans localStorage si absent
-    if (localStorage.getItem("login") == null) {
-        const login = {
-            identifiant: "admin",
-            mot_de_passe: "admin"
-        }
-        localStorage.setItem('login', JSON.stringify(login));
-    }
+    initDefaultCredentials();
 });
 
-function handleLogin(credentials) {
+async function handleLogin(credentials) {
     loading.value = true;
     error.value = '';
 
-    // On simule un délai pour le côté "premium"
-    setTimeout(() => {
-        const storedLogin = JSON.parse(localStorage.getItem("login"));
-        
-        // On compare les identifiants (identifiant = email dans le composant)
-        if (credentials.email === storedLogin.identifiant && credentials.password === storedLogin.mot_de_passe) {
-            const token = "mon_token_123_backoffice";
-            localStorage.setItem('token', JSON.stringify(token));
-            router.push("/admin/backofficeDashboard");
-        } else {
-            error.value = "Identifiants administrateur incorrects.";
-        }
-        loading.value = false;
-    }, 800);
+    const result = await authenticateBackoffice(credentials.email, credentials.password);
+    
+    if (result.success) {
+        router.push("/admin/backofficeDashboard");
+    } else {
+        error.value = result.error || "Identifiants administrateur incorrects.";
+    }
+    loading.value = false;
 }
 </script>
 

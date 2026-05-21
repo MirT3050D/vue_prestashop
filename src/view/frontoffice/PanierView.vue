@@ -1,17 +1,16 @@
 <script setup>
-// Remplace ton import existant par celui-ci :
-import { createCart, getCarts, getCart, mergeUnpaidCarts, getUnpaidCarts, deleteCart } from '@/service/cartService';
 import { onMounted, ref, computed } from 'vue';
-import ProductPanier from '@/components/frontoffice/ProductPanier.vue';
+import { useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
-import { getImage } from '@/service/api';
-import { calculateTtc, getProductTaxRate } from '@/service/price';
-import { getProduct } from '@/service/productService';
-import { createOrder, getOrderStates } from '@/service/orderService';
+import ProductPanier from '@/components/frontoffice/ProductPanier.vue';
+
+import { createCart, getCarts, getCart, mergeUnpaidCarts, getUnpaidCarts, deleteCart } from '@/service/cartService';
 import { getCustomerAddresses } from '@/service/addressService';
 import { getCustomer } from '@/service/customerService';
-import { getStockAvailables } from '@/service/stockService';
-import { useRouter } from 'vue-router';
+
+import { extractText } from '@/service/prestashopUtils';
+import { getCartStorageKey, enrichCartItem, getItemStock, computeTotalTtc, computeTotalHt, saveCart } from '@/service/cartLocalService';
+import { findCodStateId } from '@/service/checkoutService';
 
 const router = useRouter();
 const panier = ref([]);
@@ -36,10 +35,8 @@ async function relancerRegroupement() {
         messageType.value = "success";
 
         try {
-            // 2. On lance la fusion. 
-            // On lui passe l'ID du client et l'ID de son adresse (ici 42 pour ton test)
+            // 2. On lance la fusion.
             const nouveauPanier = await mergeUnpaidCarts(customerData.id, getCustomerAddresses(JSON.parse(localStorage.getItem("customer")).id));
-            console.log(JSON.parse(localStorage.getItem("customer")).id);
             if (nouveauPanier) {
                 // 3. Si un regroupement a eu lieu, on recharge l'affichage local du panier
                 await loadCart();
@@ -62,47 +59,6 @@ async function relancerRegroupement() {
         messageType.value = "error";
     }
 }
-function extractText(node) {
-    if (node == null || node === '') return null;
-    if (typeof node === 'object') {
-        const val = node['#text'] ?? node['@_id'] ?? node.id;
-        if (val !== undefined) return String(val);
-        const values = Object.values(node);
-        if (values.length === 1 && typeof values[0] !== 'object') return String(values[0]);
-        return String(node);
-    }
-    return String(node);
-}
-
-async function getItemStock(item) {
-    const productId = extractText(item?.id_product);
-    const attributeId = extractText(item?.id_product_attribute) || '0';
-    if (!productId) return 0;
-
-    try {
-        const stockData = await getStockAvailables(`filter[id_product]=[${productId}]&filter[id_product_attribute]=[${attributeId}]&display=[quantity]`);
-        if (stockData && stockData.length > 0) {
-            return parseInt(extractText(stockData[0].quantity), 10) || 0;
-        }
-    } catch (e) {
-        console.warn('Erreur récupération stock panier:', e);
-    }
-
-    return 0;
-}
-
-function getCartStorageKey() {
-    const customerJson = localStorage.getItem('customer');
-    if (customerJson) {
-        try {
-            const customerData = JSON.parse(customerJson);
-            if (customerData?.id) return `panier_${customerData.id}`;
-        } catch (e) {
-            console.error("Erreur parse customer:", e);
-        }
-    }
-    return 'panier_guest';
-}
 
 function getRowsFromCart(cart) {
     const assoc = cart?.associations;
@@ -114,9 +70,9 @@ function getRowsFromCart(cart) {
 // ========== Panier localStorage & API ==========
 onMounted(async () => {
     console.log("🚀 1. Le composant Panier est bien monté !");
-    findCodStateId();
+    const cod = await findCodStateId();
+    if (cod) codStateId.value = cod;
     loadCart();
-    console.log("data ", await getCustomer(JSON.parse(localStorage.getItem('customer')).id));
 });
 
 async function loadCart() {
@@ -146,30 +102,15 @@ async function loadCart() {
 
                 // 2. Tri manuel en JavaScript par ID décroissant pour mettre le plus récent en 1er
                 myUnpaidCarts.sort(function (a, b) {
-                    let idA = 0;
-                    if (a.id && typeof a.id === 'object') {
-                        idA = parseInt(a.id['#text'], 10) || 0;
-                    } else {
-                        idA = parseInt(a.id, 10) || 0;
-                    }
-
-                    let idB = 0;
-                    if (b.id && typeof b.id === 'object') {
-                        idB = parseInt(b.id['#text'], 10) || 0;
-                    } else {
-                        idB = parseInt(b.id, 10) || 0;
-                    }
+                    let idA = parseInt(extractText(a.id), 10) || 0;
+                    let idB = parseInt(extractText(b.id), 10) || 0;
                     return idB - idA; // Ordre décroissant
                 });
 
-                console.log("🔍 Liste triée de mes paniers non payés :", myUnpaidCarts);
-
                 if (myUnpaidCarts.length > 0) {
-                    // Le panier index 0 est maintenant à 100% le plus récent du client connecté (le fameux ID 75 !)
+                    // Le panier index 0 est maintenant à 100% le plus récent du client connecté
                     let latestCart = myUnpaidCarts[0];
                     let rows = getRowsFromCart(latestCart);
-
-                    console.log("🔍 Lignes de mon panier le plus récent :", rows);
 
                     if (rows.length > 0) {
                         const mappedItems = [];
@@ -194,48 +135,13 @@ async function loadCart() {
                 }
             }
         }
+        
         // 2. Enrichissement des données (prix, noms, images)
         if (initialCart.length > 0) {
             console.log("📦 4. Articles trouvés, on enrichit les données...", initialCart);
-            const enrichedCart = [];
-            for (let i = 0; i < initialCart.length; i++) {
-                let item = initialCart[i];
-                if (!item.id_product) continue;
-
-                let image = (item.image && !item.image.includes('blob:')) ? item.image : null;
-                let taxRate = item.taxRate;
-                let name = item.name;
-                let price = item.price;
-
-                try {
-                    const product = await getProduct(item.id_product);
-                    if (product) {
-                        if (taxRate == null) taxRate = await getProductTaxRate(item.id_product);
-                        const nameNode = product.name?.language;
-                        const text = Array.isArray(nameNode) ? nameNode[0]['#text'] : (nameNode?.['#text'] || nameNode);
-                        name = extractText(text) || 'Produit sans nom';
-                        price = Number(extractText(product.price)) || 0;
-
-                        const imgId = extractText(product.id_default_image);
-                        if (!image && imgId) {
-                            image = await getImage(`images/products/${item.id_product}/${imgId}`);
-                        }
-                    }
-                } catch (err) {
-                    console.warn(`Erreur détails pour produit ${item.id_product}`, err);
-                }
-
-                enrichedCart.push({
-                    ...item,
-                    name: name || `Produit #${item.id_product}`,
-                    price: price || 0,
-                    taxRate: Number(taxRate) || 0,
-                    image
-                });
-            }
-
+            const enrichedCart = await Promise.all(initialCart.map(item => enrichCartItem(item)));
             panier.value = enrichedCart;
-            localStorage.setItem(storageKey, JSON.stringify(enrichedCart));
+            saveCart(null, enrichedCart);
         } else {
             console.log("📭 4. Aucun article trouvé, panier vide.");
             panier.value = [];
@@ -249,49 +155,12 @@ async function loadCart() {
     }
 }
 
-async function findCodStateId() {
-    try {
-        const states = await getOrderStates();
-        if (!states) return;
-
-        for (let i = 0; i < states.length; i++) {
-            const langNode = states[i].name?.language;
-            let stateName = Array.isArray(langNode)
-                ? (langNode[0]['#text'] || '').toLowerCase()
-                : (langNode?.['#text'] || '').toLowerCase();
-
-            if (stateName.includes('livraison') || stateName.includes('cash on delivery') || stateName.includes('cod')) {
-                codStateId.value = states[i].id;
-                return;
-            }
-        }
-    } catch (e) {
-        console.log('Erreur fetch order states:', e);
-    }
-}
-
-onMounted(() => {
-    findCodStateId();
-    loadCart();
-});
-
 const totalPanier = computed(() => {
-    let total = 0;
-    for (let i = 0; i < panier.value.length; i++) {
-        let item = panier.value[i];
-        const unitPriceTTC = calculateTtc(item.price, item.taxRate);
-        total += (unitPriceTTC * item.quantity);
-    }
-    return total.toFixed(2);
+    return computeTotalTtc(panier.value);
 });
 
 const totalPanierHt = computed(() => {
-    let total = 0;
-    for (let i = 0; i < panier.value.length; i++) {
-        let item = panier.value[i];
-        total += (Number(item.price || 0) * item.quantity);
-    }
-    return total.toFixed(2);
+    return computeTotalHt(panier.value);
 });
 
 async function updateQuantity(index, newQty) {
@@ -300,7 +169,7 @@ async function updateQuantity(index, newQty) {
     const item = panier.value[index];
     if (!item) return;
 
-    const available = await getItemStock(item);
+    const available = await getItemStock(item.id_product, item.id_product_attribute);
     if (available <= 0) {
         message.value = `Stock insuffisant pour ${item.name || 'ce produit'}.`;
         messageType.value = 'error';
@@ -314,18 +183,18 @@ async function updateQuantity(index, newQty) {
     }
 
     panier.value[index].quantity = newQty;
-    localStorage.setItem(getCartStorageKey(), JSON.stringify(panier.value));
+    saveCart(null, panier.value);
 }
 
 function removeItem(index) {
     panier.value.splice(index, 1);
-    localStorage.setItem(getCartStorageKey(), JSON.stringify(panier.value));
+    saveCart(null, panier.value);
 }
 
 function viderPanier() {
     if (confirm("Voulez-vous vraiment vider votre panier ?")) {
         panier.value = [];
-        localStorage.setItem(getCartStorageKey(), JSON.stringify([]));
+        saveCart(null, []);
         // Nettoyage des paniers non payés côté API pour éviter les retours fantômes
         const customerJson = localStorage.getItem('customer');
         if (customerJson) {
@@ -350,8 +219,7 @@ function viderPanier() {
 
 // ========== Commande PrestaShop ==========
 async function passerCommande() {
-    // Le code de passerCommande reste identique, il était très bien écrit !
-    // ... [Garde ta fonction passerCommande() originale ici] ...
+    router.push('/checkout');
 }
 </script>
 

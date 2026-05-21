@@ -1,28 +1,21 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router'
+import { initDefaultCredentials, authenticateBackoffice } from '@/service/authService';
 
 const is_connected = ref("");
 const router = useRouter();
 const identifiant = ref("admin");
 const mot_de_passe = ref("admin");
+
 onMounted(() => {
-	if (localStorage.getItem("login") == null) {
-		const login = {
-			identifiant : "admin",
-			mot_de_passe: "admin"	
-		}
-		localStorage.setItem('login', JSON.stringify(login));
-	}
-})
-function login() {
-	const login = JSON.parse(localStorage.getItem("login"));
-	console.log("login",login);
-	console.log("identifiant =", identifiant.value, " mot de passe ", mot_de_passe.value);
-	if (identifiant.value == login.identifiant && mot_de_passe.value == login.mot_de_passe){
+	initDefaultCredentials();
+});
+
+async function login() {
+	const result = await authenticateBackoffice(identifiant.value, mot_de_passe.value);
+	if (result.success) {
 		is_connected.value = "mon_token_123";
-		localStorage.setItem('token', JSON.stringify(is_connected.value));
-		console.log("is_conncted",is_connected.value);
 		router.push("/backOfficeDashboard");
 	}
 }

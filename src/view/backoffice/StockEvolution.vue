@@ -1,8 +1,8 @@
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
-import { getXml } from '@/service/api';
-import { getProducts, getCombinations } from '@/service/productService';
+import { safeValue, getLangText } from '@/service/prestashopUtils';
+import { loadAllMovementData, getMovementProductName as _getMovementProductName, getMovementVariantName as _getMovementVariantName, getReasonLabel, filterMovements } from '@/service/stockMovementService';
 import Loading from '@/components/Loading.vue';
 
 const router = useRouter();
@@ -17,83 +17,13 @@ const selectedProductId = ref('all');
 const startDate = ref('');
 const endDate = ref('');
 
-// ============================================================================
-// 1. SÉCURITÉ NETTOYÉE ET ROBUSTE
-// ============================================================================
-function safeValue(node) {
-    if (node === undefined || node === null) return '';
-    if (typeof node === 'object') {
-        return String(node['#text'] || node.id || node['@_id'] || '');
-    }
-    const str = String(node);
-    return str === 'undefined' ? '' : str;
-}
-
-function getLangText(field) {
-    if (!field || !field.language) return '';
-    if (Array.isArray(field.language)) return field.language[0]['#text'];
-    return field.language['#text'];
-}
-
-function getMovementStockInfo(mvt) {
-    const stockId = safeValue(mvt.id_stock);
-    if (!stockId || stockId === '0') return null;
-    return stockAvailables.value.find(sa => String(safeValue(sa.id)) === String(stockId)) || null;
-}
-
-function isLegacyImportMovement(mvt) {
-    return safeValue(mvt.id_stock) === '0' && safeValue(mvt.id_stock_mvt_reason) === '11';
-}
-
-// ============================================================================
-// 2. DÉCODAGE DES NOMS ET DES DÉCLINAISONS
-// ============================================================================
+// Wrappers pour le template (les fonctions service ont besoin des données en paramètre)
 function getMovementProductName(mvt) {
-    let pId = safeValue(mvt.id_product);
-    if (!pId || pId === '0') {
-        const stockInfo = getMovementStockInfo(mvt);
-        pId = stockInfo ? safeValue(stockInfo.id_product) : '';
-    }
-    if ((!pId || pId === '0') && isLegacyImportMovement(mvt)) {
-        pId = safeValue(mvt.id_order);
-    }
-    if (pId && pId !== '0') {
-        const prod = products.value.find(p => String(p.id) === String(pId));
-        if (prod) return getLangText(prod.name);
-        return `Article #${pId}`;
-    }
-    return 'Article Inconnu';
+    return _getMovementProductName(mvt, products.value, stockAvailables.value);
 }
 
 function getMovementVariantName(mvt) {
-    let attrId = safeValue(mvt.id_product_attribute);
-    if (!attrId || attrId === '0') {
-        const stockInfo = getMovementStockInfo(mvt);
-        attrId = stockInfo ? safeValue(stockInfo.id_product_attribute) : '';
-    }
-    if ((!attrId || attrId === '0') && isLegacyImportMovement(mvt)) {
-        attrId = safeValue(mvt.id_supply_order);
-    }
-    if (!attrId || attrId === '0') return 'Produit simple';
-
-    const comb = combinations.value.find(c => String(safeValue(c.id)) === String(attrId));
-    if (comb && comb.reference) {
-        const refText = safeValue(comb.reference);
-        const parts = refText.split('_');
-        if (parts.length > 1) {
-            const variantName = parts.slice(1).join(' ');
-            return variantName.charAt(0).toUpperCase() + variantName.slice(1);
-        }
-        return refText;
-    }
-    return `Déclinaison #${attrId}`;
-}
-
-function getReasonLabel(reasonId, sign) {
-    const id = String(reasonId);
-    if (id === '11') return 'Importation initiale / Ajustement';
-    if (id === '12') return 'Régularisation négative';
-    return String(safeValue(sign)) === '1' ? 'Entrée de marchandises' : 'Sortie de marchandises (Commande)';
+    return _getMovementVariantName(mvt, combinations.value, stockAvailables.value);
 }
 
 // ============================================================================
@@ -102,32 +32,11 @@ function getReasonLabel(reasonId, sign) {
 onMounted(async () => {
     loading.value = true;
     try {
-        const [rawProducts, responseCombs, responseMvts] = await Promise.all([
-            getProducts('display=full'),
-            getXml('/combinations?display=full'),
-            getXml('/stock_movements?display=full')
-        ]);
-
-        products.value = rawProducts || [];
-
-        const combsList = responseCombs?.prestashop?.combinations?.combination;
-        combinations.value = Array.isArray(combsList) ? combsList : (combsList ? [combsList] : []);
-
-        const rawMvts = responseMvts?.prestashop?.stock_movements?.stock_movement
-            || responseMvts?.prestashop?.stock_mvts?.stock_mvt;
-        let mvtsArray = Array.isArray(rawMvts) ? rawMvts : (rawMvts ? [rawMvts] : []);
-
-        const responseStockAvailables = await getXml('/stock_availables?display=full');
-        const rawStocks = responseStockAvailables?.prestashop?.stock_availables?.stock_available;
-        stockAvailables.value = Array.isArray(rawStocks) ? rawStocks : (rawStocks ? [rawStocks] : []);
-
-        mvtsArray.sort((a, b) => {
-            const dateA = new Date(safeValue(a.date_add)).getTime();
-            const dateB = new Date(safeValue(b.date_add)).getTime();
-            return dateB - dateA;
-        });
-
-        movements.value = mvtsArray;
+        const data = await loadAllMovementData();
+        products.value = data.products;
+        combinations.value = data.combinations;
+        movements.value = data.movements;
+        stockAvailables.value = data.stockAvailables;
     } catch (error) {
         console.error("Erreur d'historique :", error);
     } finally {
@@ -139,44 +48,7 @@ onMounted(async () => {
 // FILTRAGE LOGIQUE (Article + Dates)
 // ============================================================================
 const filteredMovements = computed(() => {
-    let result = movements.value;
-
-    // 1. Filtre par article
-    if (selectedProductId.value !== 'all') {
-        result = result.filter(mvt => {
-            let mvtId = safeValue(mvt.id_product);
-            if (!mvtId || mvtId === '0') {
-                const stockInfo = getMovementStockInfo(mvt);
-                mvtId = stockInfo ? safeValue(stockInfo.id_product) : '';
-            }
-            if ((!mvtId || mvtId === '0') && isLegacyImportMovement(mvt)) {
-                mvtId = safeValue(mvt.id_order);
-            }
-            return String(mvtId) === String(selectedProductId.value);
-        });
-    }
-
-    // 2. Filtre par date de début (Du)
-    if (startDate.value) {
-        const start = new Date(startDate.value);
-        start.setHours(0, 0, 0, 0); // Permet d'inclure les mouvements dès minuit
-        result = result.filter(mvt => {
-            const mvtDate = new Date(safeValue(mvt.date_add));
-            return mvtDate >= start;
-        });
-    }
-
-    // 3. Filtre par date de fin (Au)
-    if (endDate.value) {
-        const end = new Date(endDate.value);
-        end.setHours(23, 59, 59, 999); // Permet d'inclure les mouvements jusqu'à 23h59
-        result = result.filter(mvt => {
-            const mvtDate = new Date(safeValue(mvt.date_add));
-            return mvtDate <= end;
-        });
-    }
-
-    return result;
+    return filterMovements(movements.value, selectedProductId.value, startDate.value, endDate.value, stockAvailables.value);
 });
 
 // Fonction pour réinitialiser les dates

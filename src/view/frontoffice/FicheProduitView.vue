@@ -7,6 +7,8 @@ import Loading from '@/components/Loading.vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import { getStockAvailables } from '@/service/stockService';
+import { getLangText, extractId as safeId } from '@/service/prestashopUtils';
+import { getCartStorageKey, getCart, saveCart, getExistingCartQuantity } from '@/service/cartLocalService';
 
 const route = useRoute();
 const router = useRouter();
@@ -24,19 +26,7 @@ const productTaxRate = ref(0);
 const stock = ref(0);
 const cartQuantity = ref(0);
 
-function getLangText(field) {
-    if (!field || !field.language) return '';
-    if (Array.isArray(field.language)) return field.language[0]['#text'];
-    return field.language['#text'];
-}
 
-function safeId(node) {
-    if (!node) return '';
-    if (typeof node === 'object') {
-        return String(node['#text'] || node['@_id'] || node.id || '');
-    }
-    return String(node);
-}
 
 async function updateCurrentStock() {
     if (!product.value) return;
@@ -335,18 +325,7 @@ const calculatedPriceHt = computed(() => {
     return parseFloat(product.value.price) || 0;
 });
 
-function getCartStorageKey() {
-    const customerJson = localStorage.getItem('customer');
-    if (customerJson) {
-        try {
-            const customerData = JSON.parse(customerJson);
-            if (customerData?.id) return `panier_${customerData.id}`;
-        } catch (e) {
-            console.error("Erreur parse customer:", e);
-        }
-    }
-    return 'panier_guest';
-}
+
 
 function getSelectedAttributeId() {
     if (productCombinations.value.length === 0) return '0';
@@ -371,25 +350,7 @@ function getSelectedAttributeId() {
     return matchingCombination ? safeId(matchingCombination.id) : '0';
 }
 
-function getExistingCartQuantity(productId, attributeId) {
-    const storageKey = getCartStorageKey();
-    let cart = [];
-    try {
-        const cartJson = localStorage.getItem(storageKey);
-        if (cartJson) {
-            cart = JSON.parse(cartJson);
-        }
-    } catch (e) {
-        console.error("Erreur lecture panier local:", e);
-    }
 
-    const existingItem = cart.find(item =>
-        String(item.id_product) === String(productId) &&
-        String(item.id_product_attribute) === String(attributeId)
-    );
-
-    return existingItem ? Number(existingItem.quantity) || 0 : 0;
-}
 
 function refreshCartQuantity() {
     if (!product.value) return;
@@ -430,15 +391,7 @@ function addToCart() {
     }
 
     const storageKey = getCartStorageKey();
-    let cart = [];
-    try {
-        const cartJson = localStorage.getItem(storageKey);
-        if (cartJson) {
-            cart = JSON.parse(cartJson);
-        }
-    } catch (e) {
-        console.error("Erreur lecture panier local:", e);
-    }
+    let cart = getCart();
 
     const existingIndex = cart.findIndex(item => 
         String(item.id_product) === String(cleanProductId) && 
@@ -459,7 +412,7 @@ function addToCart() {
         });
     }
 
-    localStorage.setItem(storageKey, JSON.stringify(cart));
+    saveCart(null, cart);
 
     cartQuantity.value = existingQty + quantity.value;
 

@@ -3,8 +3,9 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import LoginForm from '@/components/LoginForm.vue';
-import { loginFront } from '@/service/authService';
+import { loginFront, setCurrentCustomer } from '@/service/authService';
 import { getCustomers } from '@/service/customerService';
+import { extractText } from '@/service/prestashopUtils';
 
 const emit = defineEmits(['login-success']);
 const router = useRouter();
@@ -36,18 +37,6 @@ async function handleLogin(credentials) {
 
             if (customers.length > 0) {
                 let c = customers[0];
-
-                // Extraire les textes des champs langue si nécessaire
-                function extractText(field) {
-                    if (!field) return '';
-                    if (typeof field === 'string') return field;
-                    if (field.language) {
-                        if (Array.isArray(field.language)) return field.language[0]['#text'] || '';
-                        return field.language['#text'] || '';
-                    }
-                    return field['#text'] || String(field);
-                }
-
                 customerData = {
                     id: c.id,
                     email: extractText(c.email) || credentials.email,
@@ -69,8 +58,7 @@ async function handleLogin(credentials) {
         // 4. Stocker dans le localStorage
         const token = 'customer_' + Date.now() + '_' + Math.random().toString(36).substring(2);
         localStorage.setItem('customer_token', JSON.stringify(token));
-        localStorage.setItem('customer', JSON.stringify(customerData));
-        window.dispatchEvent(new Event('customer-updated'));
+        setCurrentCustomer(customerData);
 
         // 5. Émettre l'événement de succès
         emit('login-success');

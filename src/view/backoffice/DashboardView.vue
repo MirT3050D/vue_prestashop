@@ -1,9 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
-import { getOrders } from '@/service/orderService';
-import { getProduct, getProducts } from '@/service/productService';
-import { getCategories } from '@/service/categoryService';
-import { getStockAvailables } from '@/service/stockService';
+import { extractText, toNumber, getLanguageText, normalizeArray, getOrderRows, formatMoney } from '@/service/prestashopUtils';
+import { fetchDashboardData, filterOrdersByDate, computeSalesStats, computeTopProducts, computeCategoryProfitStats, computeTotals, computeTotalStockPurchaseHt } from '@/service/dashboardService';
 import StatistiqueVente from '@/components/backoffice/StatistiqueVente.vue';
 import MeilleurProduit from '@/components/backoffice/MeilleurProduit.vue';
 import Loading from '@/components/Loading.vue';
@@ -19,251 +17,20 @@ const categoryNameById = ref({});
 const isRefreshing = ref(false);
 const isLoading = ref(true);
 
-// Remplacement de la fonction fléchée et du ternaire (? :) par des if/else
-function extractText(v) {
-  if (v && typeof v === 'object') {
-    if (v['#text']) {
-      return String(v['#text']);
-    } else {
-      return '';
-    }
-  } else {
-    if (v) {
-      return String(v);
-    } else {
-      return '';
-    }
-  }
-}
-
-// Remplacement du ternaire et de l'opérateur logique court (||)
-function toNumber(v) {
-  if (v) {
-    const valueAsString = String(v).replace(',', '.');
-    const parsedNumber = parseFloat(valueAsString);
-    if (parsedNumber) {
-      return parsedNumber;
-    } else {
-      return 0;
-    }
-  } else {
-    return 0;
-  }
-}
-
-function getLanguageText(node) {
-  if (node == null) return '';
-  if (typeof node === 'string' || typeof node === 'number') return String(node);
-  if (Array.isArray(node)) {
-    return extractText(node[0]?.['#text'] ?? node[0]) || '';
-  }
-  if (typeof node === 'object') {
-    return extractText(node['#text'] ?? node.language ?? node) || '';
-  }
-  return '';
-}
-
-function normalizeArray(node) {
-  if (!node) return [];
-  return Array.isArray(node) ? node : [node];
-}
-
-function getOrderRows(order) {
-  if (!order || !order.associations || !order.associations.order_rows) return [];
-  return normalizeArray(order.associations.order_rows.order_row);
-}
-
-function formatMoney(value) {
-  const amount = Number(value) || 0;
-  return amount.toFixed(2);
-}
-
-// Fonction classique
-function getIntervalKey(dateString) {
-  const d = new Date(dateString.replace(' ', 'T'));
-
-  if (isNaN(d.getTime())) {
-    return null;
-  }
-
-  const y = d.getFullYear();
-  let m = String(d.getMonth() + 1);
-
-  // Ajouter un 0 au début si le mois est un seul chiffre (ex: "5" devient "05")
-  if (m.length === 1) {
-    m = '0' + m;
-  }
-
-  if (aggregationInterval.value === 'yearly') {
-    return y + '-01-01';
-  }
-
-  if (aggregationInterval.value === 'monthly') {
-    return y + '-' + m + '-01';
-  }
-
-  if (aggregationInterval.value === 'weekly') {
-    let day = d.getDay();
-    if (day === 0) {
-      day = 7; // Le dimanche (0) devient 7
-    }
-    d.setHours(-24 * (day - 1)); // Reculer les jours jusqu'au lundi
-    return d.toISOString().slice(0, 10);
-  }
-
-  return d.toISOString().slice(0, 10);
-}
-
-// Utilisation de function() au lieu de () => dans le computed
 const filteredOrders = computed(function () {
-  return rawOrders.value.filter(function (o) {
-    const d = extractText(o.date_add).slice(0, 10);
-
-    let isAfterStart = true;
-    if (startDate.value) {
-      if (d < startDate.value) {
-        isAfterStart = false;
-      }
-    }
-
-    let isBeforeEnd = true;
-    if (endDate.value) {
-      if (d > endDate.value) {
-        isBeforeEnd = false;
-      }
-    }
-
-    return isAfterStart && isBeforeEnd;
-  });
+  return filterOrdersByDate(rawOrders.value, startDate.value, endDate.value);
 });
 
 const salesStats = computed(function () {
-  const stats = {};
-
-  // Remplacement de "for...of" par une boucle for classique
-  for (let i = 0; i < filteredOrders.value.length; i++) {
-    const o = filteredOrders.value[i];
-    const key = getIntervalKey(extractText(o.date_add));
-
-    if (!key) {
-      continue; // Passe directement à la prochaine commande
-    }
-
-    if (!stats[key]) {
-      stats[key] = { date: key, nb_commande: 0, CA: 0 };
-    }
-
-    stats[key].nb_commande += 1;
-    stats[key].CA += toNumber(o.total_paid_tax_incl);
-  }
-
-  const statsArray = Object.values(stats);
-
-  // Remplacement de la fonction fléchée dans le sort()
-  return statsArray.sort(function (a, b) {
-    return b.date.localeCompare(a.date);
-  });
+  return computeSalesStats(filteredOrders.value, '', '', aggregationInterval.value);
 });
 
 const topProducts = computed(function () {
-  const stats = {};
-
-  for (let i = 0; i < filteredOrders.value.length; i++) {
-    const o = filteredOrders.value[i];
-
-    // Remplacement du "?." (optional chaining) par des vérifications "if"
-    let rows = null;
-    if (o.associations && o.associations.order_rows) {
-      rows = o.associations.order_rows.order_row;
-    }
-
-    // Remplacement du ternaire pour s'assurer qu'on a bien un tableau
-    let items = [];
-    if (Array.isArray(rows)) {
-      items = rows;
-    } else if (rows) {
-      items = [rows]; // S'il n'y a qu'un seul objet, on le met dans un tableau
-    }
-
-    for (let j = 0; j < items.length; j++) {
-      const item = items[j];
-      const id = extractText(item.product_id);
-
-      if (!id) {
-        continue;
-      }
-
-      if (!stats[id]) {
-        stats[id] = {
-          id: id,
-          nom: extractText(item.product_name),
-          reference: extractText(item.product_reference),
-          ventes: 0,
-          ca: 0
-        };
-      }
-
-      const qty = toNumber(item.product_quantity);
-      stats[id].ventes += qty;
-      stats[id].ca += toNumber(item.unit_price_tax_incl) * qty;
-    }
-  }
-
-  const statsArray = Object.values(stats);
-
-  const sortedArray = statsArray.sort(function (a, b) {
-    return b.ventes - a.ventes;
-  });
-
-  return sortedArray.slice(0, 5); // Garde seulement les 5 premiers
+  return computeTopProducts(filteredOrders.value, '', '', 5);
 });
 
 const categoryProfitStats = computed(function () {
-  const stats = {};
-
-  for (let i = 0; i < filteredOrders.value.length; i++) {
-    const o = filteredOrders.value[i];
-    const rows = getOrderRows(o);
-
-    for (let j = 0; j < rows.length; j++) {
-      const row = rows[j];
-      const productId = extractText(row.product_id);
-      if (!productId) continue;
-
-      const qty = toNumber(row.product_quantity);
-      const saleHt = toNumber(row.unit_price_tax_excl) * qty;
-      const saleTtc = toNumber(row.unit_price_tax_incl) * qty;
-
-      const productInfo = productInfoById.value[productId] || {};
-      const categoryId = productInfo.categoryId || '0';
-      const categoryName = categoryNameById.value[categoryId] || 'Sans categorie';
-
-      if (!stats[categoryId]) {
-        stats[categoryId] = {
-          categoryId: categoryId,
-          categoryName: categoryName,
-          totalSalesHt: 0,
-          totalSalesTtc: 0,
-          totalPurchaseHt: 0,
-          profit: 0
-        };
-      }
-
-      stats[categoryId].totalSalesHt += saleHt;
-      stats[categoryId].totalSalesTtc += saleTtc;
-      stats[categoryId].totalPurchaseHt += (productInfo.wholesalePrice || 0) * qty;
-    }
-  }
-
-  const statsArray = Object.values(stats);
-  for (let k = 0; k < statsArray.length; k++) {
-    const item = statsArray[k];
-    item.profit = item.totalSalesHt - item.totalPurchaseHt;
-  }
-
-  return statsArray.sort(function (a, b) {
-    return b.profit - a.profit;
-  });
+  return computeCategoryProfitStats(filteredOrders.value, '', '', productInfoById.value, categoryNameById.value);
 });
 
 const totalSalesHt = computed(function () {
@@ -298,139 +65,28 @@ const totalProfit = computed(function () {
 });
 
 const totalStockPurchaseHt = computed(function () {
-  const wholesalePriceById = {};
-  for (let i = 0; i < allProducts.value.length; i++) {
-    const p = allProducts.value[i];
-    const pid = extractText(p.id);
-    wholesalePriceById[pid] = toNumber(extractText(p.wholesale_price));
-  }
-
-  const stockQtyById = {};
-  for (let i = 0; i < allStocks.value.length; i++) {
-    const s = allStocks.value[i];
-    const pid = extractText(s.id_product);
-    const attrId = extractText(s.id_product_attribute) || '0';
-    if (attrId === '0') {
-      stockQtyById[pid] = toNumber(extractText(s.quantity));
-    }
-  }
-
-  const soldQtyById = {};
-  for (let i = 0; i < filteredOrders.value.length; i++) {
-    const o = filteredOrders.value[i];
-    const rows = getOrderRows(o);
-    for (let j = 0; j < rows.length; j++) {
-      const row = rows[j];
-      const pid = extractText(row.product_id);
-      if (pid) {
-        const qty = toNumber(row.product_quantity);
-        soldQtyById[pid] = (soldQtyById[pid] || 0) + qty;
-      }
-    }
-  }
-
-  let total = 0;
-  for (let i = 0; i < allProducts.value.length; i++) {
-    const p = allProducts.value[i];
-    const pid = extractText(p.id);
-    const wholesalePrice = wholesalePriceById[pid] || 0;
-    const stockQty = stockQtyById[pid] || 0;
-    const soldQty = soldQtyById[pid] || 0;
-    total += wholesalePrice * (stockQty + soldQty);
-  }
-
-  return total;
+  return computeTotalStockPurchaseHt(allProducts.value, allStocks.value, filteredOrders.value, '', '');
 });
 
 const totalStockProfit = computed(function () {
   return totalSalesHt.value - totalStockPurchaseHt.value;
 });
 
-// Déclaration de fonction asynchrone classique
 async function fetchData() {
   isLoading.value = true;
   try {
-    const [orders, productsData, stocksData] = await Promise.all([
-      getOrders({ display: 'full' }),
-      getProducts('display=[id,wholesale_price]'),
-      getStockAvailables('display=[id_product,id_product_attribute,quantity]')
-    ]);
+    const data = await fetchDashboardData();
 
-    rawOrders.value = orders.filter(function (o) {
-      return extractText(o.current_state) !== '6';
-    });
+    rawOrders.value = data.orders;
+    allProducts.value = data.allProducts;
+    allStocks.value = data.allStocks;
+    productInfoById.value = data.productInfoById;
+    categoryNameById.value = data.categoryNameById;
 
-    allProducts.value = productsData;
-    allStocks.value = stocksData;
-
-    if (rawOrders.value.length > 0 && !startDate.value) {
-
-      // Remplacement de la fonction fléchée dans le map()
-      const dates = rawOrders.value.map(function (o) {
-        const dateStr = extractText(o.date_add);
-        if (dateStr) {
-          return dateStr.slice(0, 10);
-        }
-        return null;
-      });
-
-      // Remplacement du "filter(Boolean)" par une condition explicite
-      const validDates = dates.filter(function (date) {
-        if (date !== null && date !== '') {
-          return true;
-        } else {
-          return false;
-        }
-      });
-
-      validDates.sort();
-
-      if (validDates.length > 0) {
-        startDate.value = validDates[0];
-        endDate.value = validDates[validDates.length - 1];
-      }
+    if (data.dateRange && !startDate.value) {
+      startDate.value = data.dateRange.start;
+      endDate.value = data.dateRange.end;
     }
-
-    const productIds = {};
-    for (let i = 0; i < rawOrders.value.length; i++) {
-      const rows = getOrderRows(rawOrders.value[i]);
-      for (let j = 0; j < rows.length; j++) {
-        const pid = extractText(rows[j].product_id);
-        if (pid) productIds[pid] = true;
-      }
-    }
-
-    const ids = Object.keys(productIds);
-    const infoMap = {};
-    for (let i = 0; i < ids.length; i++) {
-      const pid = ids[i];
-      try {
-        const product = await getProduct(pid, 'display=[id,wholesale_price,id_category_default,name]');
-        if (product) {
-          infoMap[pid] = {
-            wholesalePrice: toNumber(extractText(product.wholesale_price)),
-            categoryId: extractText(product.id_category_default) || '0',
-            name: getLanguageText(product.name?.language || product.name)
-          };
-        }
-      } catch (e) {
-        infoMap[pid] = { wholesalePrice: 0, categoryId: '0', name: '' };
-      }
-    }
-    productInfoById.value = infoMap;
-
-    const categoryMap = {};
-    try {
-      const cats = await getCategories('display=[id,name]');
-      for (let i = 0; i < cats.length; i++) {
-        const catId = extractText(cats[i].id);
-        const catName = getLanguageText(cats[i].name?.language || cats[i].name);
-        if (catId) categoryMap[catId] = catName || 'Sans categorie';
-      }
-    } catch (e) {
-      // Keep empty map if categories fail
-    }
-    categoryNameById.value = categoryMap;
   } finally {
     isLoading.value = false;
   }
