@@ -53,3 +53,61 @@ export async function getProductOptionValues(ids) {
     return normalizeArray(response?.prestashop?.product_option_values, 'product_option_value');
 }
 ```
+
+---
+
+## 🚀 Nouvelles fonctions (Refactoring)
+
+Suite au nettoyage du code de la fiche produit, de nouvelles fonctions avancées ont été ajoutées pour encapsuler toute la logique métier complexe :
+
+### 1. `getFullProductDetails(productId)`
+Cette fonction s'occupe de faire TOUS les appels API nécessaires au chargement d'un produit (produit de base, taxes, combinaisons, valeurs d'options) et renvoie un objet structuré, prêt à être utilisé par la Vue.
+
+**Exemple d'utilisation dans un composant :**
+```javascript
+import { getFullProductDetails } from '@/service/productService';
+
+const details = await getFullProductDetails(route.params.id);
+if (details) {
+    product.value = details.product;
+    productTaxRate.value = details.taxRate;
+    productCombinations.value = details.combinations; // Array brut
+    variants.value = details.variants; // Tableau structuré (ex: Taille avec L, XL)
+    selectedOptions.value = details.defaultSelectedOptions; // Auto-sélection de la première variante dispo
+}
+```
+
+### 2. `getCombinationImageId(defaultImageId, productCombinations, selectedOptions)`
+Permet de trouver automatiquement l'ID de l'image correspondante à la combinaison sélectionnée par l'utilisateur.
+
+**Exemple d'utilisation :**
+```javascript
+import { getCombinationImageId } from '@/service/productService';
+
+// selectedOptions ressemble à { "Taille": "2", "Couleur": "5" }
+const imageId = getCombinationImageId(
+    product.id_default_image, 
+    productCombinations.value, 
+    selectedOptions.value
+);
+
+// Ensuite on charge l'image : `/images/products/${productId}/${imageId}`
+```
+
+### 3. `getAvailableValuesForVariant(variant, allVariants, productCombinations, selectedOptions)`
+Cette fonction retourne uniquement les valeurs (ex: les couleurs) qui sont réellement compatibles avec les autres options déjà sélectionnées (ex: la taille). Elle évite de proposer une variante qui n'existe pas en stock.
+
+**Exemple d'utilisation :**
+```javascript
+import { getAvailableValuesForVariant } from '@/service/productService';
+
+// S'utilise souvent dans le template Vue pour griser/cacher les boutons
+function getAvailableValues(variantGroup) {
+    return getAvailableValuesForVariant(
+        variantGroup, 
+        variants.value, 
+        productCombinations.value, 
+        selectedOptions.value
+    );
+}
+```

@@ -1,5 +1,5 @@
-
 import { getXml, postXml, putXml, deleteXml } from '@/service/api';
+import { extractText } from '@/service/prestashopUtils';
 
 /**
  * Normalizes PrestaShop resource nodes to always return an array.
@@ -234,4 +234,67 @@ export async function mergeUnpaidCarts(customerId, addressId) {
     }
 
     return newCart;
+}
+
+function getRowsFromCart(cart) {
+    const assoc = cart?.associations;
+    if (!assoc || !assoc.cart_rows) return [];
+    const rawRows = assoc.cart_rows.cart_row || assoc.cart_rows;
+    return Array.isArray(rawRows) ? rawRows : (rawRows && typeof rawRows === 'object' ? [rawRows] : []);
+}
+
+/**
+ * Fetches the most recent unpaid cart for a customer and maps it to the local cart format.
+ */
+export async function syncAndGetLatestCart(customerId) {
+    if (!customerId) return [];
+
+    const myUnpaidCarts = await getUnpaidCarts(customerId);
+
+    myUnpaidCarts.sort(function (a, b) {
+        let idA = parseInt(extractText(a.id), 10) || 0;
+        let idB = parseInt(extractText(b.id), 10) || 0;
+        return idB - idA;
+    });
+
+    if (myUnpaidCarts.length > 0) {
+        let latestCart = myUnpaidCarts[0];
+        let rows = getRowsFromCart(latestCart);
+
+        if (rows.length > 0) {
+            const mappedItems = [];
+            for (let x = 0; x < rows.length; x++) {
+                const r = rows[x];
+                const idProd = extractText(r.id_product);
+
+                if (idProd) {
+                    mappedItems.push({
+                        id_product: idProd,
+                        id_product_attribute: extractText(r.id_product_attribute) || 0,
+                        quantity: parseInt(extractText(r.quantity), 10) || 1
+                    });
+                }
+            }
+            return mappedItems;
+        }
+    }
+    return [];
+}
+
+/**
+ * Deletes all unpaid carts for a customer from the API.
+ */
+export async function clearAllUnpaidCarts(customerId) {
+    if (!customerId) return;
+    try {
+        const carts = await getUnpaidCarts(customerId);
+        for (const cart of carts) {
+            const cartId = extractText(cart.id);
+            if (cartId) {
+                await deleteCart(cartId);
+            }
+        }
+    } catch (e) {
+        console.warn('Erreur nettoyage panier API:', e);
+    }
 }

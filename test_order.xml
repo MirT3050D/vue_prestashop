@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<prestashop>
+  <order>
+    <id_cart>783</id_cart>
+    <id_customer>443</id_customer>
+    <id_address_delivery>450</id_address_delivery>
+    <id_address_invoice>450</id_address_invoice>
+    <id_carrier>1</id_carrier>
+    <id_currency>1</id_currency>
+    <id_lang>1</id_lang>
+        <id_shop>1</id_shop>
+        <id_shop_group>1</id_shop_group>
+        <module>ps_checkout</module>
+        <secure_key>20f18086f77ba80eba02338266e9f018</secure_key>
+    <payment>Paiement accepté / En ligne</payment>
+        <total_paid>106.060606</total_paid>
+        <total_paid_real>106.060606</total_paid_real>
+        <total_products>106.060606</total_products>
+        <total_products_wt>106.060606</total_products_wt>
+        <total_shipping>0.000000</total_shipping>
+        <total_shipping_tax_excl>0.000000</total_shipping_tax_excl>
+        <total_shipping_tax_incl>0.000000</total_shipping_tax_incl>
+        <total_discounts>0.000000</total_discounts>
+        <total_discounts_tax_excl>0.000000</total_discounts_tax_excl>
+        <total_discounts_tax_incl>0.000000</total_discounts_tax_incl>
+        <total_wrapping>0.000000</total_wrapping>
+        <total_wrapping_tax_excl>0.000000</total_wrapping_tax_excl>
+        <total_wrapping_tax_incl>0.000000</total_wrapping_tax_incl>
+        <conversion_rate>1.000000</conversion_rate>
+        <current_state>2</current_state>
+        <associations>
+            <order_rows nodeType="order_row" virtualEntity="true">
+        <order_row>
+          <product_id>1550</product_id>
+          <product_attribute_id>0</product_attribute_id>
+          <product_quantity>2</product_quantity>
+          <product_name><![CDATA[Montre]]></product_name>
+          <product_reference><![CDATA[M_02]]></product_reference>
+          <product_price>53.030303</product_price>
+          <unit_price_tax_incl>53.030303</unit_price_tax_incl>
+          <unit_price_tax_excl>53.030303</unit_price_tax_excl>
+        </order_row></order_rows>
+        </associations>
+  </order>
+</prestashop>

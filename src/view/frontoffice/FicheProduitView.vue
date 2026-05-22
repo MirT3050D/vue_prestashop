@@ -1,13 +1,12 @@
 <script setup>
 import { onMounted, ref, watch, computed } from 'vue';
 import { getImage } from '@/service/api';
-import { getProduct, getCombinations, getProductOptionValues, getProductOptions } from '@/service/productService';
-import { getProductTaxRate } from '@/service/price';
+import { getFullProductDetails, getCombinationImageId, getAvailableValuesForVariant } from '@/service/productService';
 import Loading from '@/components/Loading.vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import { getStockAvailables } from '@/service/stockService';
-import { getLangText, extractId as safeId } from '@/service/prestashopUtils';
+import { getLangText, extractId as safeId, extractText } from '@/service/prestashopUtils';
 import { getCartStorageKey, getCart, saveCart, getExistingCartQuantity } from '@/service/cartLocalService';
 
 const route = useRoute();
@@ -37,7 +36,7 @@ async function updateCurrentStock() {
     try {
         const stockData = await getStockAvailables(`filter[id_product]=[${cleanProductId}]&filter[id_product_attribute]=[${idProductAttribute}]&display=[quantity]`);
         if (stockData && stockData.length > 0) {
-            stock.value = parseInt(stockData[0].quantity, 10) || 0;
+            stock.value = parseInt(extractText(stockData[0].quantity), 10) || 0;
         } else {
             stock.value = 0;
         }
@@ -55,82 +54,17 @@ async function updateImage() {
 
     const cleanProductId = safeId(product.value.id);
     const defaultImageId = safeId(product.value.id_default_image);
-    let imageIdToFetch = defaultImageId; // Image par défaut du produit
+    
+    const imageIdToFetch = getCombinationImageId(defaultImageId, productCombinations.value, selectedOptions.value);
 
-    if (productCombinations.value.length > 0) {
-        const currentSelectedValues = [];
-        for (const key of Object.keys(selectedOptions.value)) {
-            if (selectedOptions.value[key]) {
-                currentSelectedValues.push(String(selectedOptions.value[key]));
-            }
-        }
-
-        let matchingComb = null;
-        for (let i = 0; i < productCombinations.value.length; i++) {
-            const comb = productCombinations.value[i];
-            const combValues = comb.associations?.product_option_values?.product_option_value;
-            if (!combValues) continue;
-
-            const combValueIds = Array.isArray(combValues) ? combValues.map(v => safeId(v.id)) : [safeId(combValues.id)];
-
-            if (combValueIds.every(id => currentSelectedValues.includes(id))) {
-                matchingComb = comb;
-                break;
-            }
-        }
-
-        // Si la déclinaison a une image spécifique, on écrase l'image par défaut
-        if (matchingComb && matchingComb.associations && matchingComb.associations.images && matchingComb.associations.images.image) {
-            const imgData = matchingComb.associations.images.image;
-            const specificImageId = safeId(Array.isArray(imgData) ? imgData[0].id : imgData.id || imgData);
-            if (specificImageId) {
-                imageIdToFetch = specificImageId;
-            }
-        }
-    }
-
-    // On s'assure d'avoir un ID d'image valide avant d'appeler l'API
     if (imageIdToFetch && imageIdToFetch !== '0') {
         const imgUrl = await getImage(`/images/products/${cleanProductId}/${imageIdToFetch}`);
         if (imgUrl) imageUrl.value = imgUrl;
     }
 }
 
-function isOptionValueAvailable(groupName, valueId) {
-    if (productCombinations.value.length === 0) return true;
-
-    return productCombinations.value.some(comb => {
-        const combValues = comb.associations?.product_option_values?.product_option_value;
-        if (!combValues) return false;
-        
-        const combValueIds = Array.isArray(combValues)
-            ? combValues.map(v => safeId(v.id))
-            : [safeId(combValues.id)];
-
-        // Le valueId recherché doit être présent
-        if (!combValueIds.includes(String(valueId))) return false;
-
-        // Et toutes les autres sélections déjà faites doivent être compatibles
-        for (const variant of variants.value) {
-            if (variant.name === groupName) continue;
-
-            // Si ce groupe de déclinaison n'est pas du tout défini/utilisé dans cette combinaison, on ignore sa sélection
-            const isGroupUsed = variant.values.some(val => combValueIds.includes(String(val.id)));
-            if (!isGroupUsed) continue;
-
-            const selectedValId = selectedOptions.value[variant.name];
-            if (selectedValId && !combValueIds.includes(String(selectedValId))) {
-                return false;
-            }
-        }
-
-        return true;
-    });
-}
-
 function getAvailableValues(variant) {
-    if (!variant || !variant.values) return [];
-    return variant.values.filter(val => isOptionValueAvailable(variant.name, val.id));
+    return getAvailableValuesForVariant(variant, variants.value, productCombinations.value, selectedOptions.value);
 }
 
 watch(selectedOptions, async (newVal) => {
@@ -213,98 +147,26 @@ onMounted(async () => {
     loading.value = true;
     try {
         const productId = route.params.id;
-        product.value = await getProduct(productId);
-
-        productTaxRate.value = await getProductTaxRate(productId);
-
-        // CORRECTION : Chargement initial de l'image par défaut
-        const cleanProductId = safeId(product.value.id);
-        const defaultImageId = safeId(product.value.id_default_image);
-        if (defaultImageId && defaultImageId !== '0') {
-            let imgUrl = await getImage(`/images/products/${cleanProductId}/${defaultImageId}`);
-            if (imgUrl) imageUrl.value = imgUrl;
-        }
-
-        const rawCombinations = await getCombinations(productId);
-        const allCombinations = Array.isArray(rawCombinations) ? rawCombinations : (rawCombinations ? [rawCombinations] : []);
-        productCombinations.value = allCombinations;
-
-        if (allCombinations.length > 0) {
-            const optionValuesIds = new Set();
-            for (let i = 0; i < allCombinations.length; i++) {
-                let combValues = allCombinations[i].associations?.product_option_values?.product_option_value;
-                if (!combValues) continue;
-                if (Array.isArray(combValues)) {
-                    for (let j = 0; j < combValues.length; j++) optionValuesIds.add(safeId(combValues[j].id));
-                } else {
-                    optionValuesIds.add(safeId(combValues.id));
-                }
-            }
-
-            if (optionValuesIds.size > 0) {
-                const filterIds = `[${Array.from(optionValuesIds).join('|')}]`;
-
-                const rawValues = await getProductOptionValues(filterIds);
-                const values = Array.isArray(rawValues) ? rawValues : (rawValues ? [rawValues] : []);
-
-                const optionGroupsIds = new Set();
-                for (let i = 0; i < values.length; i++) {
-                    if (values[i]) {
-                        optionGroupsIds.add(safeId(values[i].id_attribute_group));
-                    }
-                }
-
-                const filterGroupIds = `[${Array.from(optionGroupsIds).join('|')}]`;
-                const rawGroups = await getProductOptions(filterGroupIds);
-                const groups = Array.isArray(rawGroups) ? rawGroups : (rawGroups ? [rawGroups] : []);
-
-                const structuredVariants = [];
-                for (let i = 0; i < groups.length; i++) {
-                    let group = groups[i];
-                    if (!group) continue;
-
-                    let groupValues = values.filter(v => v && safeId(v.id_attribute_group) === safeId(group.id));
-                    structuredVariants.push({
-                        id: safeId(group.id),
-                        name: getLangText(group.name),
-                        values: groupValues.map(v => ({ id: safeId(v.id), name: getLangText(v.name) }))
-                    });
-                }
-                variants.value = structuredVariants;
-
-                // Initialisation intelligente avec la première déclinaison existante et valide du produit
-                if (allCombinations.length > 0) {
-                    const firstComb = allCombinations[0];
-                    const combValues = firstComb.associations?.product_option_values?.product_option_value;
-                    const firstCombValueIds = Array.isArray(combValues)
-                        ? combValues.map(v => safeId(v.id))
-                        : [safeId(combValues.id)];
-
-                    for (let i = 0; i < structuredVariants.length; i++) {
-                        let v = structuredVariants[i];
-                        if (v && v.values && v.values.length > 0) {
-                            const matchingVal = v.values.find(val => firstCombValueIds.includes(String(val.id)));
-                            if (matchingVal) {
-                                selectedOptions.value[v.name] = matchingVal.id;
-                            } else {
-                                selectedOptions.value[v.name] = v.values[0].id;
-                            }
-                        }
-                    }
-                } else {
-                    for (let i = 0; i < structuredVariants.length; i++) {
-                        let v = structuredVariants[i];
-                        if (v && v.values && v.values.length > 0) {
-                            selectedOptions.value[v.name] = safeId(v.values[0].id);
-                        }
-                    }
-                }
-                lastSelectedOptions.value = { ...selectedOptions.value };
+        
+        const details = await getFullProductDetails(productId);
+        if (details) {
+            product.value = details.product;
+            productTaxRate.value = details.taxRate;
+            productCombinations.value = details.combinations;
+            variants.value = details.variants;
+            selectedOptions.value = details.defaultSelectedOptions;
+            lastSelectedOptions.value = { ...selectedOptions.value };
+            
+            // Image par defaut
+            const cleanProductId = safeId(product.value.id);
+            const defaultImageId = safeId(product.value.id_default_image);
+            if (defaultImageId && defaultImageId !== '0') {
+                let imgUrl = await getImage(`/images/products/${cleanProductId}/${defaultImageId}`);
+                if (imgUrl) imageUrl.value = imgUrl;
             }
         }
 
         await updateCurrentStock();
-        // Optionnel : Forcer un premier affichage de l'image de la déclinaison si existante
         await updateImage();
         refreshCartQuantity();
     } catch (error) {
@@ -316,13 +178,13 @@ onMounted(async () => {
 
 const calculatedPriceTtc = computed(() => {
     if (!product.value) return 0;
-    const basePriceHt = parseFloat(product.value.price) || 0;
+    const basePriceHt = parseFloat(extractText(product.value.price)) || 0;
     return basePriceHt * (1 + productTaxRate.value / 100);
 });
 
 const calculatedPriceHt = computed(() => {
     if (!product.value) return 0;
-    return parseFloat(product.value.price) || 0;
+    return parseFloat(extractText(product.value.price)) || 0;
 });
 
 
@@ -406,7 +268,7 @@ function addToCart() {
             id_product_attribute: String(idProductAttribute),
             quantity: quantity.value,
             name: getLangText(product.value.name),
-            price: Number(product.value.price) || 0,
+            price: Number(extractText(product.value.price)) || 0,
             taxRate: productTaxRate.value,
             image: imageUrl.value
         });

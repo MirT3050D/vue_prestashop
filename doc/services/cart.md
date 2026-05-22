@@ -113,5 +113,42 @@ export async function mergeUnpaidCarts(customerId, addressId) {
     }
 
     return newCart?.prestashop?.cart || newCart;
+```
+
+---
+
+## 🚀 Nouvelles fonctions (Refactoring)
+
+Dans le but de simplifier les composants Vue, toute la logique complexe de synchronisation entre le `localStorage` local et l'API PrestaShop a été extraite dans le service.
+
+### 1. `syncAndGetLatestCart(customerId)`
+Permet de récupérer le panier le plus récent d'un client (non payé) et le convertit directement dans le format de tableau simple attendu par le panier local de l'application (c'est-à-dire une liste de `cartItems`).
+
+**Exemple d'utilisation :**
+```javascript
+import { syncAndGetLatestCart } from '@/service/cartService';
+
+const apiCartItems = await syncAndGetLatestCart(customerData.id);
+if (apiCartItems && apiCartItems.length > 0) {
+    // On remplace le panier local par celui récupéré depuis le compte en ligne
+    initialCart = apiCartItems; 
+}
+```
+
+### 2. `clearAllUnpaidCarts(customerId)`
+Permet de nettoyer la base de données PrestaShop en supprimant TOUS les paniers non payés liés à un client. Très utile lorsqu'on veut vider entièrement le panier d'un client (par exemple via le bouton "Vider mon panier").
+
+**Exemple d'utilisation :**
+```javascript
+import { clearAllUnpaidCarts } from '@/service/cartService';
+
+function viderPanier() {
+    // 1. Vider le state / localStorage
+    panier.value = [];
+    
+    // 2. Supprimer les brouillons sur l'API
+    if (customerData?.id) {
+        clearAllUnpaidCarts(customerData.id);
+    }
 }
 ```

@@ -175,7 +175,7 @@ export async function getImage(url) {
       }
     });
     return URL.createObjectURL(response.data);
-    
+
   } catch (error) {
     return null;
   }
@@ -202,9 +202,9 @@ export async function getPrestaShopConfig(name) {
 
 export function formatApiError(error) {
   if (!error) return 'Erreur inconnue';
-  
+
   let msg = error.message || String(error);
-  
+
   // Extraire les infos de la requête Axios
   if (error.config) {
     const method = error.config.method ? error.config.method.toUpperCase() : '';
@@ -212,7 +212,7 @@ export function formatApiError(error) {
     // Sécurité : masquer la clé API ws_key
     url = url.replace(/ws_key=[^&]*/gi, 'ws_key=***');
     msg += ` [API ${method} ${url}]`;
-    
+
     if (error.config.params && Object.keys(error.config.params).length > 0) {
       const safeParams = { ...error.config.params };
       if (safeParams.ws_key) {
@@ -220,21 +220,21 @@ export function formatApiError(error) {
       }
       msg += ` params: ${JSON.stringify(safeParams)}`;
     }
-    
+
     if (error.config.data) {
       const payloadStr = typeof error.config.data === 'object' ? JSON.stringify(error.config.data) : String(error.config.data);
       const cleanPayload = payloadStr.replace(/\s+/g, ' ').trim();
       msg += ` | Payload : ${cleanPayload.substring(0, 300)}${cleanPayload.length > 300 ? '...' : ''}`;
     }
   }
-  
+
   // Détails de la réponse de l'API
   if (error.response) {
     msg += ` | Statut : ${error.response.status}`;
     if (error.response.data) {
       const data = error.response.data;
       const dataStr = typeof data === 'object' ? JSON.stringify(data) : String(data);
-      
+
       // XML PrestaShop
       if (dataStr.includes('<error>') || dataStr.includes('<message>')) {
         const matches = [...dataStr.matchAll(/<message[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/message>/gi)];
@@ -255,7 +255,7 @@ export function formatApiError(error) {
       else if (dataStr.includes('<!DOCTYPE') || dataStr.includes('<html')) {
         const titleMatch = dataStr.match(/<title>([\s\S]*?)<\/title>/i);
         const title = titleMatch ? titleMatch[1].trim() : '';
-        
+
         let phpError = '';
         if (dataStr.includes('Fatal error') || dataStr.includes('Parse error') || dataStr.includes('Warning:')) {
           const bodyText = dataStr.replace(/<[^>]*>/g, ' ');
@@ -264,7 +264,7 @@ export function formatApiError(error) {
             phpError = phpMatch[0].trim().replace(/\s+/g, ' ');
           }
         }
-        
+
         if (title || phpError) {
           msg += ` | Page HTML (${title || 'Sans titre'}) ${phpError ? `| PHP : ${phpError}` : ''}`;
         } else {
@@ -277,6 +277,6 @@ export function formatApiError(error) {
       }
     }
   }
-  
+
   return msg;
 }

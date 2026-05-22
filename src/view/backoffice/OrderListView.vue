@@ -13,6 +13,17 @@
     </div>
 
     <div v-else class="order-table-container">
+      <div class="filters-bar">
+        <input type="text" v-model="searchQuery" placeholder="Rechercher par ID, Réf, Client..." class="search-input" />
+        <select v-model="statusFilter" class="status-filter">
+          <option value="">Tous les états</option>
+          <option v-for="state in orderStates" :key="normalizeId(state.id)" :value="normalizeId(state.id)">
+            {{ getStatusName(state.id) }}
+          </option>
+          <option value="dans_le_panier">Dans le panier</option>
+        </select>
+      </div>
+
       <table class="order-table">
         <thead>
           <tr>
@@ -25,7 +36,7 @@
           </tr>
         </thead>
         <tbody>
-          <template v-for="order in orders" :key="order.id">
+          <template v-for="order in filteredOrders" :key="order.id">
             <tr>
               <td>{{ order.id }}</td>
               <td>{{ order.reference }}</td>
@@ -92,9 +103,19 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
-import { getOrders, getOrderStates, updateOrderStatus } from '@/service/orderService';
-import { getCarts } from '@/service/cartService';
+import { ref, onMounted, computed } from 'vue';
+import { 
+  fetchOrderListData, 
+  filterOrdersList, 
+  normalizeId as svcNormalizeId,
+  toNumber as svcToNumber,
+  getOrderRows as svcGetOrderRows,
+  isDeliveredState as svcIsDeliveredState,
+  isCanceledState as svcIsCanceledState,
+  getStatusName as svcGetStatusName,
+  getStatusColor as svcGetStatusColor,
+  processOrderStatusChange
+} from '@/service/orderListService';
 import Loading from '@/components/Loading.vue';
 import Dropdown from '@/components/Dropdown.vue';
 
@@ -105,112 +126,28 @@ const isLoading = ref(true);
 const isUpdating = ref({});
 const error = ref(null);
 
-const stateNameMapping = reactive(new Map());
-const stateColorMapping = reactive(new Map());
-const stateIdByNameLower = reactive(new Map());
+let stateNameMapping = new Map();
+let stateColorMapping = new Map();
+let stateIdByNameLower = new Map();
 
-function normalizeId(id) {
-  if (id && typeof id === 'object') return String(id['#text'] ?? id);
-  return String(id ?? '');
-}
+const searchQuery = ref('');
+const statusFilter = ref('');
 
-function getCartRows(cart) {
-  const rows = cart?.associations?.cart_rows?.cart_row || [];
-  return Array.isArray(rows) ? rows : (rows ? [rows] : []);
-}
-
-function toNumber(value) {
-  if (value == null) return 0;
-  const parsed = parseFloat(String(value).replace(',', '.'));
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-
-function getOrderRows(order) {
-  const rows = order?.associations?.order_rows?.order_row || [];
-  return Array.isArray(rows) ? rows : [rows];
-}
-
-
-function getStateIdByNameLower(nameLower) {
-  return stateIdByNameLower.get(nameLower) || '';
-}
-
-function isDeliveredState(stateId) {
-  const deliveredId = getStateIdByNameLower('livré');
-  return deliveredId && normalizeId(stateId) === deliveredId;
-}
-
-function isCanceledState(stateId) {
-  const canceledId = getStateIdByNameLower('annulé');
-  return canceledId && normalizeId(stateId) === canceledId;
-}
-
-// States we want to be able to switch to
-const TARGET_STATE_NAMES = ['paiement accepté', 'annulé', 'livré'];
+const filteredOrders = computed(() => {
+  return filterOrdersList(orders.value, statusFilter.value, searchQuery.value);
+});
 
 async function fetchData() {
   isLoading.value = true;
   error.value = null;
   try {
-    const [ordersData, statesData, cartsData] = await Promise.all([
-      getOrders({ display: 'full' }),
-      getOrderStates(),
-      getCarts({ display: 'full' })
-    ]);
-
-    // Identifiants des paniers déjà convertis en commandes
-    const convertedCartIds = new Set(ordersData.map(o => normalizeId(o.id_cart)).filter(id => id && id !== '0'));
-
-    // Filtrer les paniers non convertis et non vides
-    const activeCarts = cartsData.filter(c => {
-      if (convertedCartIds.has(normalizeId(c.id))) return false;
-      const rows = getCartRows(c);
-      return rows.length > 0;
-    });
-
-    // Normaliser les paniers pour le tableau
-    const normalizedCarts = activeCarts.map(c => ({
-      id: normalizeId(c.id),
-      reference: `PANIER #${normalizeId(c.id)}`,
-      id_customer: c.id_customer,
-      total_paid: 0, // Les paniers n'ont pas de total_paid direct dans l'API standard sans calcul
-      current_state: 'dans_le_panier',
-      isCart: true,
-      customer: c.customer || null
-    }));
-
-    orders.value = [...ordersData, ...normalizedCarts].sort((a, b) => b.id - a.id);
-    orderStates.value = statesData;
-
-    // Create mappings for quick lookup
-    statesData.forEach(state => {
-      // Handle language field: can be array (multi-lang) or object (single lang)
-      const langNode = state.name?.language;
-      let stateText = '';
-      if (Array.isArray(langNode)) {
-        stateText = langNode[0]['#text'] || '';
-      } else if (langNode && typeof langNode === 'object') {
-        stateText = langNode['#text'] || '';
-      } else if (typeof langNode === 'string') {
-        stateText = langNode;
-      }
-      const stateName = stateText.toLowerCase();
-      const idKey = normalizeId(state.id);
-      stateNameMapping.set(idKey, stateText);
-      stateColorMapping.set(idKey, state.color);
-      stateIdByNameLower.set(stateName, idKey);
-
-      if (TARGET_STATE_NAMES.includes(stateName)) {
-        targetStates.value.push(state);
-      }
-      console.log('state parsed:', { id: state.id, idKey, name: stateText, nameLower: stateName, color: state.color });
-    });
-
-    console.log('stateNameMapping entries:', Array.from(stateNameMapping.entries()));
-    console.log('stateColorMapping entries:', Array.from(stateColorMapping.entries()));
-    console.log('targetStates:', targetStates.value);
-
+    const data = await fetchOrderListData();
+    orders.value = data.orders;
+    orderStates.value = data.statesData;
+    targetStates.value = data.targetStates;
+    stateNameMapping = data.stateNameMapping;
+    stateColorMapping = data.stateColorMapping;
+    stateIdByNameLower = data.stateIdByNameLower;
   } catch (e) {
     error.value = e.message;
   } finally {
@@ -218,65 +155,45 @@ async function fetchData() {
   }
 }
 
+function normalizeId(id) {
+  return svcNormalizeId(id);
+}
+
+function toNumber(value) {
+  return svcToNumber(value);
+}
+
+function getOrderRows(order) {
+  return svcGetOrderRows(order);
+}
+
+function isDeliveredState(stateId) {
+  return svcIsDeliveredState(stateId, stateIdByNameLower);
+}
+
+function isCanceledState(stateId) {
+  return svcIsCanceledState(stateId, stateIdByNameLower);
+}
+
 function getStatusName(stateId) {
-  if (stateId === 'dans_le_panier') return 'Dans le panier';
-  const idKey = normalizeId(stateId);
-  return stateNameMapping.get(idKey) || 'Inconnu';
+  return svcGetStatusName(stateId, stateNameMapping);
 }
 
 function getStatusColor(stateId) {
-  if (stateId === 'dans_le_panier') return '#94a3b8';
-  const idKey = normalizeId(stateId);
-  const color = stateColorMapping.get(idKey);
-  return color || '#cccccc';
+  return svcGetStatusColor(stateId, stateColorMapping);
 }
 
 async function onStatusChange(orderId, newStateId) {
-  if (!newStateId) return;
-
-  const orderToUpdate = orders.value.find(o => String(o.id) === String(orderId));
-  if (!orderToUpdate || orderToUpdate.isCart) return;
-
-  const deliveredId = getStateIdByNameLower('livré');
-  const canceledId = getStateIdByNameLower('annulé');
-  const paidId = getStateIdByNameLower('paiement accepté');
-
-  if (deliveredId && normalizeId(orderToUpdate.current_state) === deliveredId && normalizeId(newStateId) !== deliveredId) {
-    alert('Cette commande est déjà livrée. Changement impossible.');
-    return;
-  }
-  // if (canceledId && normalizeId(orderToUpdate.current_state) === canceledId && normalizeId(newStateId) !== canceledId) {
-  //   alert('Cette commande est déjà annulé. Changement impossible.');
-  //   return;
-  // }
-
-
-  if (canceledId && normalizeId(newStateId) === canceledId) {
-    if (!paidId || normalizeId(orderToUpdate.current_state) !== paidId) {
-      alert('Seules les commandes payées peuvent être annulées.');
-      return;
-    }
-  }
-
   isUpdating.value[orderId] = true;
   try {
-    console.log('[OrderStatus] update start', {
-      orderId,
-      newStateId,
-      currentState: orderToUpdate.current_state,
-      deliveredId,
-      canceledId,
-      paidId
-    });
-    await updateOrderStatus(orderId, newStateId);
-    // Refresh the specific order's state locally for instant feedback
-    if (orderToUpdate) {
-      orderToUpdate.current_state = newStateId;
+    const result = await processOrderStatusChange(orderId, newStateId, orders.value, stateIdByNameLower);
+    if (!result.success && result.error) {
+      alert(result.error);
+    } else if (result.success && result.orderToUpdate) {
+      // Trigger reactivity since it's inside the ref array
+      result.orderToUpdate.current_state = newStateId;
     }
-
-    console.log('[OrderStatus] update done', { orderId, newStateId });
   } catch (e) {
-    console.error('[OrderStatus] update failed', { orderId, newStateId, error: e });
     alert(`Erreur lors de la mise à jour de la commande ${orderId}: ${e.message}`);
   } finally {
     isUpdating.value[orderId] = false;
@@ -293,6 +210,31 @@ onMounted(fetchData);
 
 .order-table-container {
   overflow-x: auto;
+}
+
+.filters-bar {
+  display: flex;
+  gap: 15px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.search-input {
+  flex: 1;
+  min-width: 250px;
+  padding: 10px 15px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 0.95rem;
+}
+
+.status-filter {
+  min-width: 200px;
+  padding: 10px 15px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  background-color: white;
 }
 
 .order-table {

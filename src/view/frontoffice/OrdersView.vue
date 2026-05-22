@@ -5,6 +5,12 @@ import Loading from '@/components/Loading.vue';
 import { getCustomerOrders, getOrderStates, parseOrderStates, getStateName, getStateColor } from '@/service/orderService';
 import { extractText, formatDate } from '@/service/prestashopUtils';
 import { getCurrentCustomer } from '@/service/authService';
+import { getCart } from '@/service/cartService';
+import { processCheckout, validateCartStock } from '@/service/checkoutService';
+import { getAddress } from '@/service/addressService';
+import { getItemStock } from '@/service/cartLocalService';
+import { getCartStorageKey } from '@/service/cartLocalService';
+import { updateOrderStatus } from '@/service/orderService';
 
 const customer = ref(null);
 const orders = ref([]);
@@ -12,6 +18,7 @@ const stateNameMap = ref(new Map());
 const stateColorMap = ref(new Map());
 const isLoading = ref(true);
 const error = ref('');
+const nombre_duplication = ref(1);
 
 function getOrderStateLabel(stateId) {
     return getStateName(stateId, stateNameMap.value);
@@ -20,6 +27,56 @@ function getOrderStateLabel(stateId) {
 function getOrderStateColor(stateId) {
     return getStateColor(stateId, stateColorMap.value);
 }
+
+// ===== Passer la commande =====
+async function passerCommande(order) {
+    let idOrder = 0;
+    const panier = await getCart(order["id_cart"]["#text"]);
+    let panier_row = panier["associations"]["cart_rows"]["cart_row"];
+    let panier_row_tab = [[]];
+    for (let index = 0; index < panier_row.length; index++) {
+        panier_row[index]["quantity"] = panier_row[index]["quantity"] * nombre_duplication.value;
+        panier_row[index]["price"] = order["associations"]["order_rows"]["order_row"][index]["product_price"];
+        panier_row[index]["name"] = order["associations"]["order_rows"]["order_row"][index]["product_name"];
+        panier_row[index]["id_product"] = panier_row[index]["id_product"]["#text"];
+        panier_row[index]["id_product_attribute"] = panier_row[index]["id_product_attribute"]["#text"];
+    }
+    if (panier_row.length == null) {
+        panier_row_tab[0]["quantity"] = panier_row["quantity"] * nombre_duplication.value;
+        panier_row_tab[0]["price"] = order["associations"]["order_rows"]["order_row"]["product_price"];
+        panier_row_tab[0]["name"] = order["associations"]["order_rows"]["order_row"]["product_name"];
+        panier_row_tab[0]["id_product"] = panier_row["id_product"]["#text"];
+        panier_row_tab[0]["id_product_attribute"] = panier_row["id_product_attribute"]["#text"];
+        panier_row = panier_row_tab;
+    }
+    console.log("CART ROW", panier_row);
+    const form = await getAddress(order["id_address_delivery"]["#text"]);
+    // Validate stock
+    const stockValidation = await validateCartStock(panier_row, async (item) => {
+        return await getItemStock(item.id_product, item.id_product_attribute);
+    });
+
+    if (!stockValidation.valid) {
+        error.value = stockValidation.error;
+        return;
+    }
+
+    error.value = '';
+
+    const result = await processCheckout(customer.value, form, panier_row, 2);
+
+    if (result.success) {
+        idOrder = result.orderId;
+        localStorage.setItem(getCartStorageKey(), JSON.stringify([]));
+        updateOrderStatus(idOrder, 5);
+        // step.value = 'confirmation';
+    } else {
+        error.value = result.error;
+        console.log("error", error);
+    }
+
+}
+
 
 async function loadData() {
     isLoading.value = true;
@@ -51,12 +108,28 @@ async function loadData() {
         const parsed = parseOrderStates(statesData);
         stateNameMap.value = parsed.nameMap;
         stateColorMap.value = parsed.colorMap;
+        console.log("order", orders.value);
+        if (orders.value.length > 0) {
+            console.log("adresse", await getAddress(orders.value[0]["id_address_delivery"]["#text"]));
+            const cart = await (getCart(orders.value[0]["id_cart"]["#text"], "?display=full"));
+            console.log("cart", cart["associations"]["cart_rows"]["cart_row"]);
+        }
     } catch (e) {
         console.error("Error loading orders:", e);
         error.value = 'Impossible de charger vos commandes pour le moment.';
     } finally {
         isLoading.value = false;
     }
+}
+
+function getOrderRows(order) {
+    const rows = order?.associations?.order_rows?.order_row || [];
+    return Array.isArray(rows) ? rows : [rows];
+}
+
+const expandedOrders = ref({});
+function toggleOrderDetails(orderId) {
+    expandedOrders.value[orderId] = !expandedOrders.value[orderId];
 }
 
 onMounted(loadData);
@@ -130,6 +203,34 @@ onMounted(loadData);
                     <div>
                         <span class="meta-label">Livraison</span>
                         <strong>Gratuite</strong>
+                    </div>
+                    <div>
+                        <button @click="passerCommande(order)">
+                            Dupliquer
+                        </button>
+                        <input v-model="nombre_duplication" type="number" id="nb">
+                    </div>
+                </div>
+
+                <div style="margin-top: 15px; text-align: center;">
+                    <button
+                        style="padding: 8px 16px; font-size: 0.85rem; background-color: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; border-radius: 8px; cursor: pointer; font-weight: 600; transition: all 0.2s ease;"
+                        @click="toggleOrderDetails(extractText(order.id))"
+                        onmouseover="this.style.backgroundColor='#e2e8f0'"
+                        onmouseout="this.style.backgroundColor='#f1f5f9'">
+                        {{ expandedOrders[extractText(order.id)] ? 'Masquer détails' : 'Voir détails' }}
+                    </button>
+                </div>
+
+                <div v-if="expandedOrders[extractText(order.id)]" class="order-details-section">
+                    <h4>Détails des produits</h4>
+                    <div class="details-list">
+                        <div v-for="(row, index) in getOrderRows(order)" :key="index" class="detail-item">
+                            <div class="detail-name">{{ extractText(row.product_name) }}</div>
+                            <div class="detail-qty">Qté: {{ extractText(row.product_quantity) }}</div>
+                            <div class="detail-price">{{ Number(extractText(row.unit_price_tax_incl) || 0).toFixed(2) }}
+                                € / u</div>
+                        </div>
                     </div>
                 </div>
             </article>
@@ -309,5 +410,52 @@ onMounted(loadData);
     .order-meta {
         grid-template-columns: 1fr;
     }
+}
+
+.order-details-section {
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px dashed #e2e8f0;
+}
+
+.order-details-section h4 {
+    margin: 0 0 12px 0;
+    font-size: 0.95rem;
+    color: #475569;
+}
+
+.details-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.detail-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    background: #f8fafc;
+    border-radius: 8px;
+    font-size: 0.9rem;
+}
+
+.detail-name {
+    flex: 2;
+    font-weight: 600;
+    color: #1e293b;
+}
+
+.detail-qty {
+    flex: 1;
+    color: #64748b;
+    text-align: center;
+}
+
+.detail-price {
+    flex: 1;
+    text-align: right;
+    font-weight: 700;
+    color: #0f172a;
 }
 </style>

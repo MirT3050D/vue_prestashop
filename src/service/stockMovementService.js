@@ -14,7 +14,9 @@ export function getMovementStockInfo(mvt, stockAvailables) {
 }
 
 export function isLegacyImportMovement(mvt) {
-    return safeValue(mvt.id_stock) === '0' && safeValue(mvt.id_stock_mvt_reason) === '11';
+    const reason = safeValue(mvt.id_stock_mvt_reason);
+    // 11 = Import initial, 12 = Régularisation, 3 = Commande
+    return safeValue(mvt.id_stock) === '0' && (reason === '11' || reason === '12' || reason === '3');
 }
 
 // ============================================================================

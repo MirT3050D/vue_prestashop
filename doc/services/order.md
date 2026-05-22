@@ -72,5 +72,34 @@ export async function updateOrderStatus(orderId, newStateId, options = {}) {
 </prestashop>`;
 
     return await postXml('/order_histories', payload);
-}
 ```
+
+---
+
+## 🚀 Fonctionnalités avancées (Détails des commandes)
+
+Lorsqu'on récupère une commande complète (avec `display=full`), l'API PrestaShop inclut tous les produits achetés sous forme de liste brute. Il est parfois difficile de parser cette liste proprement.
+
+Pour vous simplifier la vie, la fonction `getOrderRows(order)` du service `prestashopUtils.js` gère automatiquement la normalisation des détails de la commande.
+
+### Extraire les produits (lignes de commande)
+Si vous voulez afficher la liste des produits dans une vue de commandes (comme dans `OrdersView.vue` ou `OrderListView.vue`), voici comment faire :
+
+**Exemple d'utilisation :**
+```javascript
+import { getOrderRows, extractText } from '@/service/prestashopUtils';
+
+// order est un objet commande issu de getOrders()
+const products = getOrderRows(order);
+
+// products est maintenant un tableau (Array) propre, même s'il n'y a qu'un seul produit
+products.forEach(row => {
+    const nomProduit = extractText(row.product_name);
+    const quantite = extractText(row.product_quantity);
+    const prix = extractText(row.unit_price_tax_incl);
+    
+    console.log(`Produit: ${nomProduit}, Qté: ${quantite}, Prix unitaire: ${prix}`);
+});
+```
+
+Cette méthode est très utile pour implémenter des fonctionnalités comme **"Voir détails de la commande"** ou pour **dupliquer une ancienne commande** dans le panier actuel !

@@ -4,13 +4,14 @@ import { useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import ProductPanier from '@/components/frontoffice/ProductPanier.vue';
 
-import { createCart, getCarts, getCart, mergeUnpaidCarts, getUnpaidCarts, deleteCart } from '@/service/cartService';
+import { mergeUnpaidCarts, syncAndGetLatestCart, clearAllUnpaidCarts } from '@/service/cartService';
 import { getCustomerAddresses } from '@/service/addressService';
 import { getCustomer } from '@/service/customerService';
 
 import { extractText } from '@/service/prestashopUtils';
 import { getCartStorageKey, enrichCartItem, getItemStock, computeTotalTtc, computeTotalHt, saveCart } from '@/service/cartLocalService';
 import { findCodStateId } from '@/service/checkoutService';
+import { calculateTtc } from '@/service/price';
 
 const router = useRouter();
 const panier = ref([]);
@@ -60,12 +61,7 @@ async function relancerRegroupement() {
     }
 }
 
-function getRowsFromCart(cart) {
-    const assoc = cart?.associations;
-    if (!assoc || !assoc.cart_rows) return [];
-    const rawRows = assoc.cart_rows.cart_row || assoc.cart_rows;
-    return Array.isArray(rawRows) ? rawRows : (rawRows && typeof rawRows === 'object' ? [rawRows] : []);
-}
+
 
 // ========== Panier localStorage & API ==========
 onMounted(async () => {
@@ -97,41 +93,9 @@ async function loadCart() {
         if (customerJson) {
             const customerData = JSON.parse(customerJson);
             if (customerData?.id) {
-                // 1. On utilise notre fonction sécurisée qui filtre MANUELLEMENT en Javascript
-                const myUnpaidCarts = await getUnpaidCarts(customerData.id);
-
-                // 2. Tri manuel en JavaScript par ID décroissant pour mettre le plus récent en 1er
-                myUnpaidCarts.sort(function (a, b) {
-                    let idA = parseInt(extractText(a.id), 10) || 0;
-                    let idB = parseInt(extractText(b.id), 10) || 0;
-                    return idB - idA; // Ordre décroissant
-                });
-
-                if (myUnpaidCarts.length > 0) {
-                    // Le panier index 0 est maintenant à 100% le plus récent du client connecté
-                    let latestCart = myUnpaidCarts[0];
-                    let rows = getRowsFromCart(latestCart);
-
-                    if (rows.length > 0) {
-                        const mappedItems = [];
-                        for (let x = 0; x < rows.length; x++) {
-                            const r = rows[x];
-                            const idProd = extractText(r.id_product);
-
-                            if (idProd) {
-                                mappedItems.push({
-                                    id_product: idProd,
-                                    id_product_attribute: extractText(r.id_product_attribute) || 0,
-                                    quantity: parseInt(extractText(r.quantity), 10) || 1
-                                });
-                            }
-                        }
-
-                        if (mappedItems.length > 0) {
-                            // On remplace le panier local par celui de l'API
-                            initialCart = mappedItems;
-                        }
-                    }
+                const apiCart = await syncAndGetLatestCart(customerData.id);
+                if (apiCart && apiCart.length > 0) {
+                    initialCart = apiCart;
                 }
             }
         }
@@ -201,14 +165,7 @@ function viderPanier() {
             try {
                 const customerData = JSON.parse(customerJson);
                 if (customerData?.id) {
-                    getUnpaidCarts(customerData.id).then((carts) => {
-                        carts.forEach((cart) => {
-                            const cartId = extractText(cart.id);
-                            if (cartId) {
-                                deleteCart(cartId);
-                            }
-                        });
-                    });
+                    clearAllUnpaidCarts(customerData.id);
                 }
             } catch (e) {
                 console.warn('Erreur nettoyage panier API:', e);

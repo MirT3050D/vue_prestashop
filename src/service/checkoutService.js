@@ -4,6 +4,7 @@ import { getStockAvailables } from '@/service/stockService';
 import { getCustomerAddresses, createAddress } from '@/service/addressService';
 import { createCart } from '@/service/cartService';
 import { createOrder, getOrderStates, updateOrderStatusByHistory, getOrder } from '@/service/orderService';
+import { getCustomer } from '@/service/customerService';
 
 /**
  * Finds the COD (Cash on Delivery) state ID.
@@ -45,15 +46,29 @@ export async function findCodStateId() {
  * Returns { valid: true } or { valid: false, error: 'message' }.
  */
 export async function validateCartStock(cartItems, getItemStockFn) {
+    let name = [];
+    let available = [];
+    let error = [];
+    let requested = [];
+    let nisy_tsy_ampy = false;
     for (let i = 0; i < cartItems.length; i++) {
+        error[i] = 0;
         const item = cartItems[i];
-        const available = await getItemStockFn(item);
-        const requested = Number(item.quantity) || 0;
+        available[i] = await getItemStockFn(item);
+        requested[i] = Number(item.quantity) || 0;
 
-        if (requested > available) {
-            const name = item.name || `Produit #${item.id_product}`;
-            return { valid: false, error: `Stock insuffisant pour ${name}. Disponible: ${available}, dans le panier: ${requested}.` };
+        if (requested[i] > available[i]) {
+            name[i] = item.name || `Produit #${item.id_product}`;
+            error[i] = 1;
+            nisy_tsy_ampy = true;
         }
+    }
+    if (nisy_tsy_ampy) {
+        let string_retour = "";
+        for (let index = 0; index < name.length; index++) {
+            string_retour = string_retour + "||" + `Stock insuffisant pour ${name[index]}. Disponible: ${available[index]}, dans le panier: ${requested[index]}.`
+        }
+        return { valid: false, error: string_retour };
     }
 
     return { valid: true };
@@ -62,7 +77,7 @@ export async function validateCartStock(cartItems, getItemStockFn) {
 // ============================================================================
 // LOGIQUE DE DÉCRÉMENTATION DE STOCK (Avec Hack pour StockEvolution.vue)
 // ============================================================================
-export async function forceUpdateStockAvailable(stockAvailable, newQty) {
+export async function forceUpdateStockAvailable(stockAvailable, newQty, physicalQty, reservedQty) {
     const stId = extractText(stockAvailable.id);
     const stProductId = extractText(stockAvailable.id_product);
     let stAttrId = extractText(stockAvailable.id_product_attribute);
@@ -81,6 +96,8 @@ export async function forceUpdateStockAvailable(stockAvailable, newQty) {
         <id_shop><![CDATA[${stShop}]]></id_shop>
         <id_shop_group><![CDATA[${stShopGroup}]]></id_shop_group>
         <quantity><![CDATA[${newQty}]]></quantity>
+        <physical_quantity><![CDATA[${physicalQty}]]></physical_quantity>
+        <reserved_quantity><![CDATA[${reservedQty}]]></reserved_quantity>
         <depends_on_stock><![CDATA[${stDepends}]]></depends_on_stock>
         <out_of_stock><![CDATA[${stOutOfStock}]]></out_of_stock>
         <location><![CDATA[${stLocation}]]></location>
@@ -97,29 +114,20 @@ export async function decrementStock(productId, attributeId, quantity, orderId) 
 
         if (stockAvailable) {
             if (Array.isArray(stockAvailable)) stockAvailable = stockAvailable[0];
+
             const oldQty = parseInt(extractText(stockAvailable.quantity), 10) || 0;
             const newQty = oldQty - quantity;
 
-            await forceUpdateStockAvailable(stockAvailable, newQty);
+            let physicalQty = parseInt(extractText(stockAvailable.physical_quantity), 10);
+            if (isNaN(physicalQty)) physicalQty = oldQty; // Fallback
 
-            const dateAdd = new Date().toISOString().slice(0, 19).replace('T', ' ');
+            let reservedQty = parseInt(extractText(stockAvailable.reserved_quantity), 10) || 0;
+            const newReservedQty = reservedQty + quantity;
 
-            // CORRECTION ICI : On utilise id_order et id_supply_order pour que StockEvolution.vue affiche le bon nom !
-            const baseXml = `
-                <id_order><![CDATA[${productId}]]></id_order>
-                <id_supply_order><![CDATA[${attrFilter}]]></id_supply_order>
-                <id_employee><![CDATA[1]]></id_employee>
-                <id_stock><![CDATA[0]]></id_stock>
-                <id_stock_mvt_reason><![CDATA[3]]></id_stock_mvt_reason>
-                <physical_quantity><![CDATA[${quantity}]]></physical_quantity>
-                <sign><![CDATA[0]]></sign>
-                <price_te><![CDATA[0.000000]]></price_te>
-                <date_add><![CDATA[${dateAdd}]]></date_add>
-            `;
-            await postXml('/stock_movements', `<?xml version="1.0" encoding="UTF-8"?>\n<prestashop><stock_mvt>${baseXml}</stock_mvt></prestashop>`);
+            await forceUpdateStockAvailable(stockAvailable, newQty, physicalQty, newReservedQty);
         }
     } catch (e) {
-        console.warn(`[checkout] Erreur décrémentation: ${e.message}`);
+        console.warn(`[checkout] Erreur réservation stock: ${e.message}`);
     }
 }
 
@@ -146,7 +154,7 @@ export function buildAddressXml(customerId, form) {
 /**
  * Returns XML string for cart creation.
  */
-export function buildCartXml(customerId, addressId, items) {
+export function buildCartXml(customerId, addressId, items, secureKey) {
     let cartRowsXml = '';
 
     for (let i = 0; i < items.length; i++) {
@@ -168,6 +176,7 @@ export function buildCartXml(customerId, addressId, items) {
     <id_customer>${customerId}</id_customer>
     <id_address_delivery>${addressId}</id_address_delivery>
     <id_address_invoice>${addressId}</id_address_invoice>
+    <secure_key>${secureKey}</secure_key>
     <associations>
       <cart_rows>${cartRowsXml}</cart_rows>
     </associations>
@@ -178,7 +187,7 @@ export function buildCartXml(customerId, addressId, items) {
 /**
  * Returns XML string for order creation.
  */
-export function buildOrderXml(cartId, customerId, addressId, items, stateId, totalHt) {
+export function buildOrderXml(cartId, customerId, addressId, items, stateId, totalHt, secureKey) {
     let orderRowsXml = '';
 
     for (let i = 0; i < items.length; i++) {
@@ -197,8 +206,6 @@ export function buildOrderXml(cartId, customerId, addressId, items, stateId, tot
           <unit_price_tax_excl>${basePriceHt.toFixed(6)}</unit_price_tax_excl>
         </order_row>`;
     }
-
-    const secureKey = Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
@@ -231,7 +238,7 @@ export function buildOrderXml(cartId, customerId, addressId, items, stateId, tot
         <conversion_rate>1.000000</conversion_rate>
         <current_state>${stateId}</current_state>
         <associations>
-            <order_rows>${orderRowsXml}</order_rows>
+            <order_rows nodeType="order_row" virtualEntity="true">${orderRowsXml}</order_rows>
         </associations>
   </order>
 </prestashop>`;
@@ -243,6 +250,10 @@ export function buildOrderXml(cartId, customerId, addressId, items, stateId, tot
  * Returns { success, orderId, error }.
  */
 export async function processCheckout(customer, form, cartItems, codStateId) {
+    if (!cartItems || cartItems.length === 0) {
+        return { success: false, orderId: null, error: 'Votre panier est vide. Veuillez ajouter des produits avant de commander.' };
+    }
+
     try {
         let idAdresse = 0;
 
@@ -267,16 +278,32 @@ export async function processCheckout(customer, form, cartItems, codStateId) {
             cartTotal += basePriceHt * cartItems[i].quantity;
         }
 
-        let cartXml = buildCartXml(customer.id, idAdresse, cartItems);
+        let sharedSecureKey = Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+        try {
+            const customerDetails = await getCustomer(customer.id);
+            if (customerDetails && customerDetails.secure_key) {
+                sharedSecureKey = extractText(customerDetails.secure_key) || sharedSecureKey;
+            }
+        } catch (e) {
+            console.warn("Could not fetch customer secure_key, using random", e);
+        }
+
+        let cartXml = buildCartXml(customer.id, idAdresse, cartItems, sharedSecureKey);
+        console.log("cartItem", cartItems);
+        console.log("cartxml", cartXml);
         let cartResp = await createCart(cartXml);
+        console.log("cart_resp", cartResp);
         let idCart = cartResp?.id || 0;
+        console.log("id_cart", idCart);
 
         if (!idCart) {
             return { success: false, orderId: null, error: 'Impossible de créer le panier. Veuillez réessayer.' };
         }
 
-        let orderXml = buildOrderXml(idCart, customer.id, idAdresse, cartItems, codStateId, cartTotal);
+        let orderXml = buildOrderXml(idCart, customer.id, idAdresse, cartItems, codStateId, cartTotal, sharedSecureKey);
+        console.log("oder check xml", orderXml);
         let orderResp = await createOrder(orderXml);
+        console.log("oder check", orderResp);
         let orderId = null;
 
         if (orderResp) {
@@ -291,13 +318,13 @@ export async function processCheckout(customer, form, cartItems, codStateId) {
                 await updateOrderStatusByHistory(String(orderId), String(codStateId));
             }
 
-            // DÉCRÉMENTATION DE STOCK FORCÉE
-            for (let i = 0; i < cartItems.length; i++) {
-                let item = cartItems[i];
-                await decrementStock(item.id_product, item.id_product_attribute || 0, item.quantity, orderId);
-            }
+            // // DÉCRÉMENTATION DE STOCK FORCÉE
+            // for (let i = 0; i < cartItems.length; i++) {
+            //     let item = cartItems[i];
+            //     await decrementStock(item.id_product, item.id_product_attribute || 0, item.quantity, orderId);
+            // }
         }
-
+        console.log("tonga eto @ farany");
         return { success: true, orderId: orderId, error: null };
 
     } catch (err) {

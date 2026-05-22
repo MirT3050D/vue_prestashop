@@ -2,12 +2,10 @@
 import { ref, onMounted, computed } from 'vue';
 import { Icon } from '@iconify/vue';
 import { calculateTtc } from '@/service/price';
-import { getCustomerAddresses, createAddress } from '@/service/addressService';
-import { createCart } from '@/service/cartService';
-import { createOrder, getOrderStates, updateOrderStatusByHistory, getOrder } from '@/service/orderService';
+import { getCustomerAddresses } from '@/service/addressService';
 import { extractText } from '@/service/prestashopUtils';
 import { getCartStorageKey, enrichCartItem, getItemStock } from '@/service/cartLocalService';
-import { findCodStateId, decrementStock, buildAddressXml, buildCartXml, buildOrderXml } from '@/service/checkoutService';
+import { processCheckout, validateCartStock } from '@/service/checkoutService';
 import { useRouter } from 'vue-router';
 
 const router = useRouter();
@@ -130,84 +128,29 @@ async function passerCommande() {
     if (error.value) return;
 
     // Validate stock
-    for (let i = 0; i < panier.value.length; i++) {
-        const item = panier.value[i];
-        const available = await getItemStock(item.id_product, item.id_product_attribute);
-        const requested = Number(item.quantity) || 0;
-        if (requested > available) {
-            const name = item.name || `Produit #${item.id_product}`;
-            error.value = `Stock insuffisant pour ${name}. Disponible: ${available}, dans le panier: ${requested}.`;
-            return;
-        }
+    const stockValidation = await validateCartStock(panier.value, async (item) => {
+        return await getItemStock(item.id_product, item.id_product_attribute);
+    });
+    
+    if (!stockValidation.valid) {
+        error.value = stockValidation.error;
+        return;
     }
 
     loading.value = true;
     error.value = '';
 
-    try {
-        let idAdresse = 0;
-
-        try {
-            const adresses = await getCustomerAddresses(customer.value.id);
-            if (adresses.length > 0 && adresses[0].id) idAdresse = adresses[0].id;
-        } catch (e) { }
-
-        if (!idAdresse) {
-            const adresseXml = buildAddressXml(customer.value.id, form.value);
-            let adresseResp = await createAddress(adresseXml);
-            idAdresse = adresseResp?.id || 0;
-        }
-
-        if (!idAdresse) {
-            error.value = 'Impossible de créer l\'adresse. Vérifiez les champs.';
-            loading.value = false;
-            return;
-        }
-
-        const cartXml = buildCartXml(customer.value.id, idAdresse, panier.value);
-        let cartResp = await createCart(cartXml);
-        let idCart = cartResp?.id || 0;
-
-        if (!idCart) {
-            error.value = 'Impossible de créer le panier. Veuillez réessayer.';
-            loading.value = false;
-            return;
-        }
-
-        let cartTotal = 0;
-        for (let i = 0; i < panier.value.length; i++) {
-            cartTotal += Number(panier.value[i].price || 0) * panier.value[i].quantity;
-        }
-
-        const orderXml = buildOrderXml(idCart, customer.value.id, idAdresse, panier.value, codStateId.value, cartTotal);
-        let orderResp = await createOrder(orderXml);
-        if (orderResp) {
-            idOrder.value = extractText(orderResp.id) || '?';
-        }
-
-        if (idOrder.value && idOrder.value !== '?') {
-            const freshOrder = await getOrder(idOrder.value);
-            const currentStateAfterCreate = Number(extractText(freshOrder?.current_state));
-
-            if (currentStateAfterCreate && currentStateAfterCreate !== Number(codStateId.value)) {
-                await updateOrderStatusByHistory(String(idOrder.value), String(codStateId.value));
-            }
-
-            // DÉCRÉMENTATION DE STOCK FORCÉE
-            for (let i = 0; i < panier.value.length; i++) {
-                let item = panier.value[i];
-                await decrementStock(item.id_product, item.id_product_attribute || 0, item.quantity, idOrder.value);
-            }
-        }
-
+    const result = await processCheckout(customer.value, form.value, panier.value, codStateId.value);
+    
+    if (result.success) {
+        idOrder.value = result.orderId;
         localStorage.setItem(getCartStorageKey(), JSON.stringify([]));
         step.value = 'confirmation';
-
-    } catch (err) {
-        error.value = 'Une erreur est survenue lors de la commande. Veuillez réessayer.';
-    } finally {
-        loading.value = false;
+    } else {
+        error.value = result.error;
     }
+    
+    loading.value = false;
 }
 </script>
 
@@ -302,10 +245,10 @@ async function passerCommande() {
                             <Icon icon="lucide:arrow-left" />
                             Retour au panier
                         </router-link>
-                        <button type="submit" class="btn-confirm" :disabled="loading">
+                        <button type="submit" class="btn-confirm" :disabled="loading || panier.length === 0">
                             <Icon v-if="loading" icon="lucide:loader-2" class="spin" />
                             <Icon v-else icon="lucide:shield-check" />
-                            {{ loading ? 'Commande en cours...' : 'Confirmer la commande' }}
+                            {{ panier.length === 0 ? 'Panier vide' : (loading ? 'Commande en cours...' : 'Confirmer la commande') }}
                         </button>
                     </div>
                 </form>

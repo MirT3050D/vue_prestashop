@@ -64,27 +64,29 @@ export async function enrichCartItem(item) {
     let name = item.name;
     let reference = item.reference;
 
-    if (taxRate == null) {
+    if (taxRate == null && item.id_product && String(item.id_product) !== '0' && String(item.id_product) !== 'undefined') {
         taxRate = await getProductTaxRate(item.id_product);
     }
 
     try {
-        const product = await getProduct(item.id_product);
-        if (product) {
-            price = Number(extractText(product.price)) || 0;
-            const nameNode = product.name?.language;
-            const text = Array.isArray(nameNode) ? nameNode[0]['#text'] : (nameNode?.['#text'] || nameNode);
-            name = extractText(text) || 'Produit sans nom';
-            reference = extractText(product.reference) || '';
+        if (item.id_product && String(item.id_product) !== '0' && String(item.id_product) !== 'undefined') {
+            const product = await getProduct(item.id_product);
+            if (product) {
+                price = Number(extractText(product.price)) || 0;
+                const nameNode = product.name?.language;
+                const text = Array.isArray(nameNode) ? nameNode[0]['#text'] : (nameNode?.['#text'] || nameNode);
+                name = extractText(text) || 'Produit sans nom';
+                reference = extractText(product.reference) || '';
 
-            if (product.id_default_image) {
-                let imgId = product.id_default_image;
-                if (typeof imgId === 'object' && imgId['#text']) imgId = imgId['#text'];
-                if (typeof imgId === 'object' && imgId['@_xlink:href']) {
-                    imgId = imgId['@_xlink:href'].split('/').pop();
+                if (product.id_default_image) {
+                    let imgId = product.id_default_image;
+                    if (typeof imgId === 'object' && imgId['#text']) imgId = imgId['#text'];
+                    if (typeof imgId === 'object' && imgId['@_xlink:href']) {
+                        imgId = imgId['@_xlink:href'].split('/').pop();
+                    }
+                    const path = `images/products/${item.id_product}/${imgId}`;
+                    image = await getImage(path);
                 }
-                const path = `images/products/${item.id_product}/${imgId}`;
-                image = await getImage(path);
             }
         }
     } catch (e) { }
