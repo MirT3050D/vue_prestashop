@@ -11,6 +11,7 @@ import { getAddress } from '@/service/addressService';
 import { getItemStock } from '@/service/cartLocalService';
 import { getCartStorageKey } from '@/service/cartLocalService';
 import { updateOrderStatus } from '@/service/orderService';
+import router from '@/router';
 
 const customer = ref(null);
 const orders = ref([]);
@@ -19,6 +20,9 @@ const stateColorMap = ref(new Map());
 const isLoading = ref(true);
 const error = ref('');
 const nombre_duplication = ref(1);
+const duplicate_order = ref(null);
+const duplicate_order_row = ref(null);
+const stock = ref(null);
 
 function getOrderStateLabel(stateId) {
     return getStateName(stateId, stateNameMap.value);
@@ -26,6 +30,48 @@ function getOrderStateLabel(stateId) {
 
 function getOrderStateColor(stateId) {
     return getStateColor(stateId, stateColorMap.value);
+}
+
+async function assignedDuplicateOrder(order) {
+    const panier = await getCart(order["id_cart"]["#text"]);
+    let panier_row = panier["associations"]["cart_rows"]["cart_row"];
+    let panier_row_tab = [[]];
+    for (let index = 0; index < panier_row.length; index++) {
+        panier_row[index]["quantity"] = panier_row[index]["quantity"] * nombre_duplication.value;
+        panier_row[index]["price"] = order["associations"]["order_rows"]["order_row"][index]["product_price"];
+        panier_row[index]["name"] = order["associations"]["order_rows"]["order_row"][index]["product_name"];
+        panier_row[index]["id_product"] = panier_row[index]["id_product"]["#text"];
+        panier_row[index]["id_product_attribute"] = panier_row[index]["id_product_attribute"]["#text"];
+    }
+    if (panier_row.length == null) {
+        panier_row_tab[0]["quantity"] = panier_row["quantity"] * nombre_duplication.value;
+        panier_row_tab[0]["price"] = order["associations"]["order_rows"]["order_row"]["product_price"];
+        panier_row_tab[0]["name"] = order["associations"]["order_rows"]["order_row"]["product_name"];
+        panier_row_tab[0]["id_product"] = panier_row["id_product"]["#text"];
+        panier_row_tab[0]["id_product_attribute"] = panier_row["id_product_attribute"]["#text"];
+        panier_row = panier_row_tab;
+    }
+    console.log("CART ROW", panier_row);
+    const form = await getAddress(order["id_address_delivery"]["#text"]);
+    // Validate stock
+    stock.value = await validateCartStock(panier_row, async (item) => {
+        return await getItemStock(item.id_product, item.id_product_attribute);
+    });
+    console.log("stock", stock.value);
+    duplicate_order.value = order;
+    duplicate_order_row.value = order["associations"]["order_rows"]["order_row"];
+    duplicate_order_row.value["somme"] = 0;
+    for (let index = 0; index < duplicate_order_row.value.length; index++) {
+        duplicate_order_row.value["somme"] = (duplicate_order_row.value[index]["unit_price_tax_incl"] * duplicate_order_row.value[index]["product_quantity"]) + duplicate_order_row.value["somme"];
+    }
+    console.log("duplcate_order", duplicate_order.value);
+    console.log("duplcate_order_row", duplicate_order_row.value);
+}
+
+function annulerDuplication() {
+    duplicate_order.value = null;
+    duplicate_order_row.value = null;
+    router.go(0);
 }
 
 // ===== Passer la commande =====
@@ -69,6 +115,7 @@ async function passerCommande(order) {
         idOrder = result.orderId;
         localStorage.setItem(getCartStorageKey(), JSON.stringify([]));
         updateOrderStatus(idOrder, 5);
+        router.go(0);
         // step.value = 'confirmation';
     } else {
         error.value = result.error;
@@ -136,7 +183,33 @@ onMounted(loadData);
 </script>
 
 <template>
-    <div class="orders-view">
+    <div v-if="duplicate_order != null" class="verification">
+        <table>
+            <th>Produit</th>
+            <th>Quantité</th>
+            <th>Prix</th>
+            <tr v-for="order in duplicate_order_row">
+                <td>{{ order["product_name"] }}</td>
+                <td>{{ order["product_quantity"] }}</td>
+                <td>{{ order["unit_price_tax_incl"] }} euro</td>
+                <td> = {{ order["unit_price_tax_incl"] * order["product_quantity"] }} euro</td>
+            </tr>
+        </table>
+        <h3>
+            Total : {{ duplicate_order_row["somme"] }}
+        </h3>
+        <button @click="annulerDuplication()">
+            Annuler
+        </button>
+        <button @click="passerCommande(duplicate_order)" v-if="stock.valid == true">
+            Continuer
+        </button>
+        <p v-else>
+            {{ stock.error }}
+        </p>
+
+    </div>
+    <div v-else class="orders-view">
         <section class="hero-card">
             <div>
                 <p class="eyebrow">Espace client</p>
@@ -205,7 +278,7 @@ onMounted(loadData);
                         <strong>Gratuite</strong>
                     </div>
                     <div>
-                        <button @click="passerCommande(order)">
+                        <button @click="assignedDuplicateOrder(order)">
                             Dupliquer
                         </button>
                         <input v-model="nombre_duplication" type="number" id="nb">

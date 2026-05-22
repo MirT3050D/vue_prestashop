@@ -51,12 +51,17 @@ export async function validateCartStock(cartItems, getItemStockFn) {
     let error = [];
     let requested = [];
     let nisy_tsy_ampy = false;
+    let string_info = "";
+    console.log("cart valider", cartItems);
+    console.log("length", cartItems.length);
     for (let i = 0; i < cartItems.length; i++) {
+        console.log("oui moditra")
         error[i] = 0;
         const item = cartItems[i];
         available[i] = await getItemStockFn(item);
         requested[i] = Number(item.quantity) || 0;
-
+        string_info = string_info + "||" + `Stock pour ${name[i]}. Disponible: ${available[i]}, dans le panier: ${requested[i]}.`
+        name[i] = null;
         if (requested[i] > available[i]) {
             name[i] = item.name || `Produit #${item.id_product}`;
             error[i] = 1;
@@ -66,12 +71,14 @@ export async function validateCartStock(cartItems, getItemStockFn) {
     if (nisy_tsy_ampy) {
         let string_retour = "";
         for (let index = 0; index < name.length; index++) {
-            string_retour = string_retour + "||" + `Stock insuffisant pour ${name[index]}. Disponible: ${available[index]}, dans le panier: ${requested[index]}.`
+            if (name[index] != null) {
+                string_retour = string_retour + "||" + `Stock insuffisant pour ${name[index]}. Disponible: ${available[index]}, dans le panier: ${requested[index]}.`
+            }
         }
         return { valid: false, error: string_retour };
     }
 
-    return { valid: true };
+    return { valid: true, info: string_info };
 }
 
 // ============================================================================
