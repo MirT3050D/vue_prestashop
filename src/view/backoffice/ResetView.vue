@@ -1,4 +1,10 @@
 <script setup>
+/**
+ * @file ResetView.vue
+ * @description Interface critique d'administration permettant la suppression de données en base de données.
+ * Conçue pour nettoyer la boutique de manière ciblée via des appels DELETE (pas de truncate) 
+ * pour conserver l'intégrité de la base et la sécurité de PrestaShop. Nécessite une validation manuelle.
+ */
 import { computed, ref } from 'vue';
 import { resetTargets as productResetTargets } from '@/service/resetTargets';
 import { runResetForTargets } from '@/service/resetService';

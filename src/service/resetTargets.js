@@ -1,3 +1,6 @@
+// Définition de l'ordre et des cibles pour le nettoyage de la base de données (Rollback).
+// ATTENTION: L'ordre est CRITIQUE à cause des clés étrangères en BDD.
+// Il faut supprimer les détails de commande avant les commandes, les produits avant les catégories, etc.
 export const resetTargets = [
   {
     key: 'order_details',
@@ -42,6 +45,7 @@ export const resetTargets = [
     collectionKey: 'customers',
     itemKey: 'customer',
     defaultSelected: true,
+    // SÉCURITÉ: Ne jamais supprimer le client ID 1 (Client anonyme/visiteur par défaut de PrestaShop)
     skipIds: [1]
   },
   {
@@ -87,6 +91,7 @@ export const resetTargets = [
     collectionKey: 'categories',
     itemKey: 'category',
     defaultSelected: true,
+    // SÉCURITÉ: Ne jamais supprimer la Catégorie 1 (Racine cachée) et 2 (Accueil)
     skipIds: [1, 2]
   },
   {
@@ -147,7 +152,7 @@ export const resetTargets = [
     key: 'stock_movements',
     label: 'Mouvements de stock',
     endpoint: '/stock_movements',
-    collectionKey: 'stock_mvts', // Attention ici : c'est bien stock_mvts avec un "s" (le fameux piège !)
+    collectionKey: 'stock_mvts', // Attention ici : particularité de l'API PrestaShop, c'est bien stock_mvts avec un "s" (le fameux piège !)
     itemKey: 'stock_mvt',
     skipIds: []
   }

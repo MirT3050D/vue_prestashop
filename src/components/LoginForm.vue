@@ -2,20 +2,43 @@
 import { ref } from 'vue'
 import { Icon } from '@iconify/vue'
 
+// ============================================================================
+// DÉFINITION DES PROPRIÉTÉS (PROPS)
+// ============================================================================
 const props = defineProps({
+    // État de chargement (désactive le bouton et affiche le spinner)
     loading: { type: Boolean, default: false },
+    // Message d'erreur à afficher en rouge en haut du formulaire
     error: { type: String, default: '' },
+    // Titre principal du formulaire
     title: { type: String, default: 'Connexion' },
+    // Sous-titre descriptif
     subtitle: { type: String, default: 'Veuillez vous connecter' },
+    // Comportement de l'autocomplétion du navigateur. 
+    // Si 'admin', pré-remplit les champs avec "admin" (utile en dev)
     autocomplete: { type: String, default: 'on' }
 })
 
+// ============================================================================
+// GESTION DES ÉVÉNEMENTS (EMITS)
+// ============================================================================
+// Émet un événement 'submit' contenant l'email et le mot de passe quand l'utilisateur valide
 const emit = defineEmits(['submit'])
 
+// ============================================================================
+// ÉTATS RÉACTIFS (VARIABLES)
+// ============================================================================
 const email = ref(props.autocomplete === 'admin' ? 'admin' : '')
 const password = ref(props.autocomplete === 'admin' ? 'admin' : '')
+// Contrôle l'affichage en clair ou caché du mot de passe
 const showPassword = ref(false)
 
+// ============================================================================
+// MÉTHODES
+// ============================================================================
+/**
+ * Intercepte la soumission du formulaire et envoie les données au composant parent.
+ */
 function handleSubmit() {
     emit('submit', {
         email: email.value,
@@ -25,7 +48,9 @@ function handleSubmit() {
 </script>
 
 <template>
+    <!-- Carte principale du formulaire de connexion -->
     <div class="login-card">
+        <!-- En-tête : Icône, Titre, Sous-titre -->
         <div class="login-header">
             <div class="login-icon-wrapper">
                 <Icon icon="lucide:user-circle" class="login-icon" />
@@ -34,13 +59,16 @@ function handleSubmit() {
             <p class="login-subtitle">{{ subtitle }}</p>
         </div>
 
-        <!-- Message d'erreur -->
+        <!-- Bannière d'erreur (Visible uniquement si la prop 'error' est remplie) -->
         <div v-if="error" class="error-banner">
             <Icon icon="lucide:alert-circle" />
             <span>{{ error }}</span>
         </div>
 
+        <!-- Formulaire de connexion (Empêche le rechargement de page via @submit.prevent) -->
         <form class="login-form" @submit.prevent="handleSubmit">
+            
+            <!-- Champ : E-mail -->
             <div class="field-group">
                 <label for="login-email" class="field-label">
                     <Icon icon="lucide:mail" class="field-icon" />
@@ -57,12 +85,14 @@ function handleSubmit() {
                 />
             </div>
 
+            <!-- Champ : Mot de passe -->
             <div class="field-group">
                 <label for="login-password" class="field-label">
                     <Icon icon="lucide:lock" class="field-icon" />
                     Mot de passe
                 </label>
                 <div class="password-wrapper">
+                    <!-- Type dynamique: 'text' si showPassword est vrai, sinon 'password' -->
                     <input
                         id="login-password"
                         v-model="password"
@@ -72,6 +102,7 @@ function handleSubmit() {
                         :autocomplete="autocomplete === 'on' ? 'current-password' : autocomplete"
                         class="field-input"
                     />
+                    <!-- Bouton en forme d'œil pour afficher/masquer le mot de passe -->
                     <button
                         type="button"
                         class="toggle-password"
@@ -83,7 +114,9 @@ function handleSubmit() {
                 </div>
             </div>
 
+            <!-- Bouton de validation -->
             <button type="submit" class="submit-btn" :disabled="loading">
+                <!-- Affiche un spinner de chargement si loading est true -->
                 <Icon v-if="loading" icon="lucide:loader-2" class="spin" />
                 <Icon v-else icon="lucide:log-in" />
                 {{ loading ? 'Connexion...' : 'Se connecter' }}
@@ -93,6 +126,7 @@ function handleSubmit() {
 </template>
 
 <style scoped>
+/* Design général de la carte (Centrée, blanche, ombre douce) */
 .login-card {
     width: 100%;
     max-width: 440px;
@@ -204,6 +238,7 @@ function handleSubmit() {
     color: #a4b0be;
 }
 
+/* Positionnement de l'icône oeil dans le champ mot de passe */
 .password-wrapper {
     position: relative;
 }

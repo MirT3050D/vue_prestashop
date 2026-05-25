@@ -1,4 +1,14 @@
 <script setup>
+/**
+ * @file StockView.vue
+ * @description Vue centrale de gestion logistique du stock.
+ * Affiche la quantité physique, réservée, et disponible pour chaque produit/déclinaison.
+ * Permet l'ajustement manuel direct de la quantité avec mise à jour API et création 
+ * automatique de l'historique des mouvements pour garantir la comptabilité.
+ */
+// ============================================================================
+// IMPORTATIONS
+// ============================================================================
 import { onMounted, ref, computed } from 'vue';
 import { getProducts } from '@/service/productService';
 import { getStockAvailables, updateProductStock } from '@/service/stockService';
@@ -6,21 +16,25 @@ import { getOrders } from '@/service/orderService';
 import { getCategories } from '@/service/categoryService';
 import { getXml } from '@/service/api';
 import { extractId, getLangText, getCategoryName } from '@/service/prestashopUtils';
-import { createStockMovement } from '@/service/stockMovementService';
+// Permet de forcer la trace dans l'historique lors d'une modif manuelle
+import { createStockMovement } from '@/service/stockMovementService'; 
 import Loading from '@/components/Loading.vue';
 
 // ============================================================================
 // VARIABLES D'ÉTAT
 // ============================================================================
-const items = ref([]);
-const loading = ref(true);
-const searchTxt = ref('');
-const message = ref('');
-const messageType = ref('');
+const items = ref([]);         // Liste nettoyée et combinée des lignes de stocks
+const loading = ref(true);     // Spinner de chargement
+const searchTxt = ref('');     // Texte du champ de recherche
+const message = ref('');       // Bannière de message (Succès / Erreur)
+const messageType = ref('');   // Type de message ('success' ou 'error')
 
 // ============================================================================
 // UTILITAIRES UI
 // ============================================================================
+/**
+ * Affiche une bannière temporaire de 4 secondes (Toast notification)
+ */
 function triggerBanner(msg, type) {
     message.value = msg;
     messageType.value = type;
@@ -28,7 +42,7 @@ function triggerBanner(msg, type) {
 }
 
 // ============================================================================
-// CHARGEMENT INTELLIGENT DES STOCKS
+// LOGIQUE MÉTIER PRINCIPALE : CHARGEMENT DU TABLEAU DE BORD
 // ============================================================================
 async function loadStockDashboard() {
     loading.value = true;
@@ -36,7 +50,8 @@ async function loadStockDashboard() {
     message.value = '';
 
     try {
-        // 1. Récupération parallèle de TOUTES les données nécessaires
+        // 1. Récupération parallèle massive pour gagner du temps.
+        // On récupère Produits, Stocks réels, Déclinaisons (Combinations) et Catégories
         const [productsList, stocksList, responseCombs, categoriesList] = await Promise.all([
             getProducts('display=full'),
             getStockAvailables('display=full'),
@@ -44,19 +59,22 @@ async function loadStockDashboard() {
             getCategories('display=[id,name]')
         ]);
 
-        // 1.1 Chargement des commandes payees (etat 2) pour calculer les reserves
+        // 1.1 Gestion des commandes en attente (Réservations)
+        // Objectif : Savoir combien de produits sont déjà payés mais pas encore livrés.
         let paidOrders = [];
         try {
+            // Filtre par statut = 2 (Généralement "Paiement accepté" dans PrestaShop)
             paidOrders = await getOrders({ display: 'full', 'filter[current_state]': '[2]' });
         } catch (e) {
             paidOrders = [];
         }
         if (!paidOrders || paidOrders.length === 0) {
-            // Fallback si le filtre ne renvoie rien
+            // Méthode de secours si le filtre API échoue
             paidOrders = await getOrders({ display: 'full' });
             paidOrders = paidOrders.filter(o => extractId(o.current_state) === '2');
         }
 
+        // reservedMap va stocker la quantité réservée pour chaque (Produit + Attribut)
         const reservedMap = {};
         for (let i = 0; i < paidOrders.length; i++) {
             const order = paidOrders[i];
@@ -68,12 +86,15 @@ async function loadStockDashboard() {
                 const productId = extractId(row.product_id);
                 const attrId = extractId(row.product_attribute_id) || '0';
                 if (!productId) continue;
+                
                 const qty = parseInt(extractId(row.product_quantity), 10) || 0;
+                // La clé est un hash "idProduit:idAttribut"
                 const key = `${productId}:${attrId}`;
                 reservedMap[key] = (reservedMap[key] || 0) + qty;
             }
         }
 
+        // Préparation des dictionnaires (Map) pour accès rapide aux déclinaisons et catégories
         const combinationsList = responseCombs?.prestashop?.combinations?.combination || [];
         const combs = Array.isArray(combinationsList) ? combinationsList : [combinationsList];
 
@@ -94,6 +115,8 @@ async function loadStockDashboard() {
         }
 
         // 2. Détection des produits possédant des déclinaisons
+        // PrestaShop génère toujours une ligne "Générale" (Attribute = 0) même s'il y a des attributs.
+        // Il faut l'ignorer pour ne pas fausser le stock !
         const productsWithVariants = new Set();
         stocksList.forEach(stock => {
             if (extractId(stock.id_product_attribute) !== '0') {
@@ -101,13 +124,13 @@ async function loadStockDashboard() {
             }
         });
 
-        // 3. Construction du tableau filtré
+        // 3. Construction du tableau final
         const tempItems = [];
         for (const stock of stocksList) {
             const pId = extractId(stock.id_product);
             const attrId = extractId(stock.id_product_attribute);
 
-            // LOGIQUE CLÉ : Si le produit a des variantes, on ignore sa ligne globale "0" (qui fausse le total)
+            // LOGIQUE CLÉ : On ignore la ligne "Mère" si le produit a des filles (déclinaisons).
             if (productsWithVariants.has(pId) && attrId === '0') {
                 continue;
             }
@@ -118,7 +141,7 @@ async function loadStockDashboard() {
             const categoryId = extractId(product.id_category_default);
             const categoryName = getCategoryName(categoryId, categoryMap);
 
-            // Extraction du joli nom de la déclinaison
+            // Extraction du joli nom de la déclinaison depuis la référence (ex: MUG_ROUGE -> ROUGE)
             let variantName = '-';
             if (attrId !== '0') {
                 const comb = combs.find(c => extractId(c.id) === attrId);
@@ -126,14 +149,15 @@ async function loadStockDashboard() {
                     const parts = comb.reference.split('_');
                     variantName = parts.length > 1 ? parts.slice(1).join(' ') : comb.reference;
                 } else {
-                    variantName = `Var #${attrId}`; // Sécurité
+                    variantName = `Var #${attrId}`;
                 }
             }
 
+            // Calculs critiques de quantité
             const reservedQty = reservedMap[`${pId}:${attrId}`] || 0;
+            // PrestaShop donne "availableQty". La quantité PHYSIQUE réelle est Dispo + Réservé.
             const availableQty = parseInt(stock.quantity['#text'] || stock.quantity, 10) || 0;
-            const qty = availableQty + reservedQty;
-
+            const qty = availableQty + reservedQty; 
 
             tempItems.push({
                 id: extractId(stock.id),
@@ -143,15 +167,15 @@ async function loadStockDashboard() {
                 reference: product.reference || '',
                 variantName: variantName,
                 categoryName: categoryName,
-                quantity: qty,
-                reserved_quantity: reservedQty,
-                available_quantity: availableQty,
-                editable_quantity: qty,
-                is_saving: false
+                quantity: qty,                       // Quantité totale dans l'entrepôt
+                reserved_quantity: reservedQty,      // Quantité devant être expédiée
+                available_quantity: availableQty,    // Quantité vendable sur le site
+                editable_quantity: qty,              // Variable liée au champ de saisie HTML
+                is_saving: false                     // Indicateur de chargement pour le bouton de cette ligne
             });
         }
 
-        // Tri par nom de produit
+        // Tri alphabétique par nom de produit
         items.value = tempItems.sort((a, b) => a.name.localeCompare(b.name));
 
     } catch (error) {
@@ -165,6 +189,9 @@ async function loadStockDashboard() {
 // ============================================================================
 // SAUVEGARDE MANUELLE AVEC TRAÇABILITÉ (HACK MYSQL INTÉGRÉ)
 // ============================================================================
+/**
+ * Appelée lorsqu'un administrateur tape un nouveau chiffre et clique sur "Sauvegarder"
+ */
 async function handleSaveStock(item) {
     if (item.editable_quantity < 0 || isNaN(item.editable_quantity)) {
         triggerBanner("La quantité ne peut pas être négative.", "error");
@@ -175,16 +202,18 @@ async function handleSaveStock(item) {
     try {
         const diff = item.editable_quantity - item.quantity;
 
-        // 1. Mise à jour réelle via l'API
+        // 1. Mise à jour réelle via l'API Standard (Change le stock dans PrestaShop)
         await updateProductStock(item.id_product, item.id_product_attribute, item.editable_quantity);
 
-        // 2. Traçabilité forcée avec nos IDs cachés pour StockEvolution.vue !
+        // 2. CORRECTION CRITIQUE : PrestaShop API a un bug et n'enregistre pas l'historique lors des modifs manuelles.
+        // On force la création d'une ligne d'historique via notre service spécial.
         if (diff !== 0) {
             const sign = diff > 0 ? 1 : -1;
             const reasonId = diff > 0 ? 11 : 12; // 11=Ajustement Positif, 12=Ajustement Négatif
             await createStockMovement(item.id_product, item.id_product_attribute, Math.abs(diff), sign, reasonId);
         }
 
+        // On valide la modification dans l'interface
         item.quantity = item.editable_quantity;
         triggerBanner(`Stock mis à jour pour "${item.name}".`, "success");
 
@@ -199,6 +228,9 @@ async function handleSaveStock(item) {
 // ============================================================================
 // PROPRIÉTÉS CALCULÉES
 // ============================================================================
+/**
+ * Filtre instantanément le tableau en fonction de la barre de recherche.
+ */
 const filteredItems = computed(() => {
     return items.value.filter(item => {
         const matchTxt = item.name.toLowerCase().includes(searchTxt.value.toLowerCase()) ||
@@ -207,13 +239,16 @@ const filteredItems = computed(() => {
     });
 });
 
-// NOUVEAU : Résumé global par catégorie
+/**
+ * Agrège dynamiquement les stocks pour générer le "Résumé par Catégorie" en bas de page.
+ */
 const categoryStocks = computed(() => {
     const categories = {};
 
     for (const item of items.value) {
         const cat = item.categoryName;
 
+        // Initialisation de la catégorie si elle n'existe pas encore
         if (!categories[cat]) {
             categories[cat] = {
                 name: cat,
@@ -223,6 +258,7 @@ const categoryStocks = computed(() => {
             };
         }
 
+        // Addition des compteurs
         categories[cat].quantity += item.quantity;
         categories[cat].reserved_quantity += item.reserved_quantity;
         categories[cat].available_quantity += item.available_quantity;
@@ -231,6 +267,7 @@ const categoryStocks = computed(() => {
     return Object.values(categories).sort((a, b) => a.name.localeCompare(b.name));
 });
 
+// Lancement au démarrage
 onMounted(loadStockDashboard);
 </script>
 
@@ -243,15 +280,18 @@ onMounted(loadStockDashboard);
             <p>Gérez les quantités de vos produits et déclinaisons en temps réel.</p>
         </div>
 
+        <!-- Bannière d'alerte contextuelle (succès / erreur) -->
         <div v-if="message" :class="['alert-banner', messageType]">
             {{ message }}
         </div>
 
+        <!-- Barre de recherche -->
         <div class="toolbar">
             <input v-model="searchTxt" type="text" placeholder="Rechercher un produit (Nom, Réf...)"
                 class="search-input" />
         </div>
 
+        <!-- Tableau principal des articles -->
         <div class="table-container">
             <table class="stock-table">
                 <thead>
@@ -278,6 +318,7 @@ onMounted(loadStockDashboard);
                             <span v-else class="text-muted">Produit standard</span>
                         </td>
 
+                        <!-- La couleur du badge (qty-ok, qty-low, qty-empty) change dynamiquement selon le nombre -->
                         <td>
                             <span
                                 :class="['qty-badge', item.quantity > 5 ? 'qty-ok' : (item.quantity > 0 ? 'qty-low' : 'qty-empty')]">
@@ -296,10 +337,12 @@ onMounted(loadStockDashboard);
                             </span>
                         </td>
 
+                        <!-- Le champ modifiable "editable_quantity" -->
                         <td>
                             <input type="number" v-model="item.editable_quantity" class="qty-input" min="0" />
                         </td>
 
+                        <!-- Le bouton ne devient cliquable QUE SI la quantité a été modifiée manuellement -->
                         <td>
                             <button @click="handleSaveStock(item)"
                                 :disabled="item.is_saving || item.quantity === item.editable_quantity" class="btn-save">
@@ -315,6 +358,7 @@ onMounted(loadStockDashboard);
             </div>
         </div>
 
+        <!-- SECTION 2 : RÉSUMÉ PAR CATÉGORIE -->
         <div class="header-section mt-40">
             <h2>Résumé par Catégorie</h2>
             <p>Vue globale des quantités physiques, réservées et disponibles par catégorie.</p>

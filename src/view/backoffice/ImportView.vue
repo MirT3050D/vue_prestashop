@@ -3,20 +3,24 @@
     <h1>Import de Données via CSV</h1>
     <p>Sélectionnez un fichier CSV pour importer des données dans PrestaShop.</p>
 
+    <!-- Grille affichant les 4 types de fichiers que l'on peut importer -->
     <div class="import-grid">
-      <!-- Card 1: Produits -->
+      
+      <!-- Card 1: Import de Produits -->
       <div class="upload-card">
         <h2>1. Import de Produits</h2>
         <p>Format: reference, nom, prix_ttc, Taxe, categorie</p>
         <div class="upload-section">
+          <!-- onFileChange permet de stocker le fichier sélectionné dans la bonne variable métier -->
           <input type="file" accept=".csv" @change="(e) => onFileChange(e, 'product')" :disabled="isImportingAll"
             class="file-input" />
         </div>
       </div>
 
-      <!-- Card 2: Variations -->
+      <!-- Card 2: Import de Variations (Déclinaisons) -->
       <div class="upload-card">
         <h2>2. Import de Variations</h2>
+        <!-- ex: karazany = type, couleur... -->
         <p>Format: reference, specificité, karazany, stock_initial, prix_vente_ttc, Taxe</p>
         <div class="upload-section">
           <input type="file" accept=".csv" @change="(e) => onFileChange(e, 'variant')" :disabled="isImportingAll"
@@ -24,7 +28,7 @@
         </div>
       </div>
 
-      <!-- Card 3: Orders -->
+      <!-- Card 3: Import de Commandes -->
       <div class="upload-card">
         <h2>3. Import de Commandes</h2>
         <p>Format: customer_email, customer_firstname, customer_lastname, product_reference, product_quantity,
@@ -35,13 +39,12 @@
         </div>
       </div>
 
-      <!-- Card 4: Image Import -->
+      <!-- Card 4: Import d'Images (Fichier ZIP) -->
       <div class="upload-card">
         <h2>4. Import d'Images</h2>
-        <p>
-          Ne pas importer les image
-        </p>
+        <p>Ne pas importer les image</p>
 
+        <!-- Option spéciale pour squeezer (ignorer) l'import d'images car c'est souvent très long -->
         <input type="checkbox" v-model="checkbox">
         {{ checkbox }}
         <p>Format: .zip contenant les images (ex: REF123.jpg, REF123_1.png)</p>
@@ -52,6 +55,7 @@
       </div>
     </div>
 
+    <!-- Bouton maître pour tout lancer -->
     <div class="controls" style="margin-top:20px;">
       <button class="action-btn" @click="startAllImports" :disabled="isImportingAll">
         {{ isImportingAll ? 'Import global en cours...' : 'Lancer l\'import (produit → déclinaison → commande → image)'
@@ -59,6 +63,7 @@
       </button>
     </div>
 
+    <!-- Le terminal / Journal d'activité -->
     <div v-if="logs.length" class="logs-section">
       <h3>Journal de l'import :</h3>
       <ul>
@@ -71,27 +76,44 @@
 </template>
 
 <script setup>
+/**
+ * @file ImportView.vue
+ * @description Interface d'importation de données de masse (Produits, Variations, Commandes, Images) via CSV et ZIP.
+ * Il est impératif de respecter l'ordre séquentiel d'import (Produits -> Variations -> Commandes -> Images)
+ * pour ne pas briser l'intégrité référentielle de PrestaShop. Utilise PapaParse pour lire les CSV.
+ */
 import { ref, vModelCheckbox } from 'vue';
+// Librairie PapaParse : Le couteau suisse pour lire du CSV en javascript !
 import Papa from 'papaparse';
 import { processProductImport, processVariantImport, processOrderImport } from '@/service/import';
 import { processImageImport } from '@/service/imageImport';
 
-const checkbox = ref(false);
-const fileProduct = ref(null);
-const fileVariant = ref(null);
-const fileOrder = ref(null);
-const fileImage = ref(null);
-const isImportingProduct = ref(false);
-const isImportingVariant = ref(false);
-const isImportingOrder = ref(false);
-const isImportingImage = ref(false);
-const isImportingAll = ref(false);
-const logs = ref([]);
+// ============================================================================
+// VARIABLES RÉACTIVES
+// ============================================================================
+const checkbox = ref(false); // Ignorer les images (Logique inversée dans le code)
+const fileProduct = ref(null); // Fichier sélectionné pour les produits
+const fileVariant = ref(null); // Fichier sélectionné pour les déclinaisons
+const fileOrder = ref(null);   // Fichier sélectionné pour les commandes
+const fileImage = ref(null);   // Fichier sélectionné pour les images
+const isImportingAll = ref(false); // Sécurité anti double-clic
+const logs = ref([]); // Le journal de bord
 
+// ============================================================================
+// MÉTHODES
+// ============================================================================
+/**
+ * Pousse une ligne de log dans le terminal virtuel.
+ * @param {string} type - 'info', 'success', 'error'
+ * @param {string} message - Le texte à afficher
+ */
 const addLog = (type, message) => {
   logs.value.push({ type, message });
 };
 
+/**
+ * Fonction appelée chaque fois que l'utilisateur clique sur "Parcourir" et sélectionne un fichier.
+ */
 const onFileChange = (event, type) => {
   if (type === 'product') {
     fileProduct.value = event.target.files[0];
@@ -104,33 +126,40 @@ const onFileChange = (event, type) => {
   }
 };
 
+/**
+ * Transforme le fichier CSV brut du disque dur en un Tableau JavaScript JSON compréhensible.
+ */
 function parseCsvFile(file) {
   return new Promise((resolve, reject) => {
     Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
+      header: true, // Utilise la première ligne du CSV comme nom des colonnes
+      skipEmptyLines: true, // Ignore les lignes vides à la fin du fichier
       complete: (results) => resolve(results.data),
       error: (err) => reject(err)
     });
   });
 }
 
+/**
+ * Chef d'orchestre global. Exécute les imports SÉQUENTIELLEMENT (Produits -> Déclinaisons -> Commandes -> Images).
+ * L'ordre est CRITIQUE. On ne peut pas importer une commande si le produit n'existe pas encore !
+ */
 const startAllImports = async () => {
   isImportingAll.value = true;
-  logs.value = [];
+  logs.value = []; // Vide le terminal
 
   try {
-    // 1. Produit
+    // ÉTAPE 1 : PRODUITS
     if (fileProduct.value) {
       addLog('info', 'Lecture CSV Produits...');
       const data = await parseCsvFile(fileProduct.value);
       addLog('success', `${data.length} lignes trouvées dans le CSV Produits. Début de l'import.`);
-      await processProductImport(data, addLog);
+      await processProductImport(data, addLog); // Laisse le service d'import faire le sale boulot
     } else {
       addLog('info', 'Pas de fichier Produits fourni — ignoré.');
     }
 
-    // 2. Déclinaison (Variations)
+    // ÉTAPE 2 : DÉCLINAISONS
     if (fileVariant.value) {
       addLog('info', 'Lecture CSV Variations...');
       const data = await parseCsvFile(fileVariant.value);
@@ -140,7 +169,7 @@ const startAllImports = async () => {
       addLog('info', 'Pas de fichier Variations fourni — ignoré.');
     }
 
-    // 3. Commande
+    // ÉTAPE 3 : COMMANDES
     if (fileOrder.value) {
       addLog('info', 'Lecture CSV Commandes...');
       const data = await parseCsvFile(fileOrder.value);
@@ -150,29 +179,31 @@ const startAllImports = async () => {
       addLog('info', 'Pas de fichier Commandes fourni — ignoré.');
     }
 
+    // ÉTAPE 4 : IMAGES (Si la case n'est pas cochée)
     if (checkbox.value == false) {
-      // 4. Image (zip)
       if (fileImage.value) {
         addLog('info', 'Import Images (zip) — début...');
-        await processImageImport(fileImage.value, addLog);
+        await processImageImport(fileImage.value, addLog); // Le service Image gère le dézippage lui-même
       } else {
         addLog('info', 'Pas de fichier Images fourni — ignoré.');
       }
-
     }
     else {
       addLog('info', 'image non importé');
     }
+    
     addLog('success', 'Import global terminé.');
   } catch (e) {
+    // Interception des erreurs fatales
     addLog('error', `Erreur lors de l'import global : ${e.message}`);
   } finally {
-    isImportingAll.value = false;
+    isImportingAll.value = false; // Déverrouillage final
   }
 };
 </script>
 
 <style scoped>
+/* Conteneur principal limité en largeur pour rester beau sur grand écran */
 .import-page {
   max-width: 1000px;
   margin: 0 auto;
@@ -180,6 +211,7 @@ const startAllImports = async () => {
   padding: 20px;
 }
 
+/* Grille 2 colonnes (Desktop) */
 .import-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -187,12 +219,14 @@ const startAllImports = async () => {
   margin-top: 30px;
 }
 
+/* Grille 1 colonne (Mobile) */
 @media (max-width: 768px) {
   .import-grid {
     grid-template-columns: 1fr;
   }
 }
 
+/* Style des cartes blanches */
 .upload-card {
   background: white;
   padding: 24px;
@@ -220,7 +254,7 @@ const startAllImports = async () => {
   font-size: 0.85rem;
   color: #64748b;
   margin-bottom: 20px;
-  flex-grow: 1;
+  flex-grow: 1; /* Pousse l'input vers le bas */
 }
 
 .upload-section {
@@ -234,6 +268,7 @@ const startAllImports = async () => {
   font-size: 0.9rem;
 }
 
+/* Le bouton principal dégradé */
 .action-btn {
   padding: 12px 20px;
   background: linear-gradient(135deg, #0f172a, #2563eb);
@@ -259,11 +294,7 @@ const startAllImports = async () => {
   box-shadow: none;
 }
 
-.placeholder-card {
-  background: #f8fafc;
-  border-style: dashed;
-}
-
+/* Style Terminal / Journal */
 .logs-section {
   margin-top: 40px;
   background-color: #1e293b;
@@ -271,8 +302,8 @@ const startAllImports = async () => {
   padding: 24px;
   border-radius: 12px;
   max-height: 400px;
-  overflow-y: auto;
-  font-family: monospace;
+  overflow-y: auto; /* Scroll interne */
+  font-family: monospace; /* Police code source */
 }
 
 .logs-section h3 {
@@ -287,6 +318,7 @@ const startAllImports = async () => {
   margin: 0;
 }
 
+/* Lignes de logs */
 .logs-section li {
   margin-bottom: 8px;
   padding: 8px 12px;
@@ -297,6 +329,7 @@ const startAllImports = async () => {
   word-break: break-word;
 }
 
+/* Couleurs spécifiques selon le type d'événement */
 .info {
   color: #60a5fa;
   border-left: 3px solid #60a5fa;

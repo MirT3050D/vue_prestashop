@@ -1,17 +1,32 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router'
+// Importation des services d'authentification pour gérer la connexion
 import { initDefaultCredentials, authenticateBackoffice } from '@/service/authService';
 
 const is_connected = ref("");
-const router = useRouter();
+const router = useRouter(); // Permet de forcer le changement de page programmatiquement
+
+// Données réactives liées au formulaire de connexion
 const identifiant = ref("admin");
 const mot_de_passe = ref("admin");
 
+// ============================================================================
+// CYCLE DE VIE
+// ============================================================================
+// Lors du montage, on s'assure que les identifiants par défaut sont initialisés 
+// (Probablement pour la démo ou le dev)
 onMounted(() => {
 	initDefaultCredentials();
 });
 
+// ============================================================================
+// MÉTHODES
+// ============================================================================
+/**
+ * Tente de connecter l'administrateur avec les identifiants fournis.
+ * Si succès, redirige vers le dashboard.
+ */
 async function login() {
 	const result = await authenticateBackoffice(identifiant.value, mot_de_passe.value);
 	if (result.success) {
@@ -21,7 +36,10 @@ async function login() {
 }
 </script>
 <template>
+	<!-- Page entière de connexion (Séparée en 2 grandes zones : Hero à gauche, Formulaire à droite) -->
 	<div class="login-page">
+		
+		<!-- 1. Zone Hero (Décoration et accroche) -->
 		<section class="login-hero">
 			<div class="brand-chip">ADMIN SHOP</div>
 			<h1>Connexion securisee</h1>
@@ -30,6 +48,7 @@ async function login() {
 				et les outils de maintenance.
 			</p>
 
+			<!-- 3 petites tuiles d'arguments (Métrique) -->
 			<div class="hero-metrics">
 				<div>
 					<strong>24/7</strong>
@@ -46,6 +65,7 @@ async function login() {
 			</div>
 		</section>
 
+		<!-- 2. Zone Formulaire (La carte blanche) -->
 		<section class="login-card">
 			<header class="card-header">
 				<p class="eyebrow">Bienvenue</p>
@@ -55,9 +75,11 @@ async function login() {
 				</p>
 			</header>
 
+			<!-- Formulaire de login -->
 			<form class="login-form" @submit.prevent="login">
 				<div class="field">
 					<label for="email">Indentifiant</label>
+					<!-- Le v-model permet de lier ce champ à la variable 'identifiant' -->
 					<input v-model="identifiant" id="email" name="email" placeholder="admin@shop.local"
 						value="admin" />
 				</div>
@@ -68,13 +90,12 @@ async function login() {
 						placeholder="Votre mot de passe" value="admin" autocomplete="admin"/>
 				</div>
 
+				<!-- Option Se souvenir de moi (Visuel uniquement pour l'instant) -->
 				<div class="form-row">
 					<label class="remember-me">
 						<input type="checkbox" name="remember" />
 						<span>Se souvenir de moi</span>
 					</label>
-
-
 				</div>
 
 				<button type="submit" class="login-button">Connexion</button>
@@ -93,16 +114,20 @@ async function login() {
 </template>
 
 <style scoped>
+/* === LAYOUT GLOBAL === */
+/* Utilise CSS Grid pour faire une mise en page 60% Image / 40% Formulaire sur Desktop */
 .login-page {
 	min-height: 100vh;
 	display: grid;
 	grid-template-columns: minmax(0, 1.1fr) minmax(360px, 460px);
+	/* Background complexe multi-couches avec dégradés radiaux et linéaires */
 	background:
 		radial-gradient(circle at top left, rgba(59, 130, 246, 0.22), transparent 34%),
 		radial-gradient(circle at bottom right, rgba(14, 165, 233, 0.16), transparent 28%),
 		linear-gradient(135deg, #0f172a 0%, #111827 48%, #e2e8f0 48%, #f8fafc 100%);
 }
 
+/* === SECTION GAUCHE (HERO) === */
 .login-hero {
 	display: flex;
 	flex-direction: column;
@@ -126,6 +151,7 @@ async function login() {
 
 .login-hero h1 {
 	margin: 0;
+	/* Clamp permet au texte de grandir selon la taille de l'écran, avec un min et un max */
 	font-size: clamp(2.4rem, 4vw, 4.5rem);
 	line-height: 0.96;
 	max-width: 10ch;
@@ -139,6 +165,7 @@ async function login() {
 	color: rgba(226, 232, 240, 0.86);
 }
 
+/* Les 3 petites tuiles */
 .hero-metrics {
 	display: grid;
 	grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -165,6 +192,7 @@ async function login() {
 	color: rgba(226, 232, 240, 0.72);
 }
 
+/* === SECTION DROITE (CARTE BLANCHE) === */
 .login-card {
 	align-self: center;
 	justify-self: end;
@@ -175,6 +203,7 @@ async function login() {
 	background: rgba(255, 255, 255, 0.92);
 	border: 1px solid rgba(148, 163, 184, 0.18);
 	box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+	/* Effet de flou derrière la carte */
 	backdrop-filter: blur(14px);
 }
 
@@ -293,7 +322,9 @@ async function login() {
 	color: #64748b;
 }
 
+/* === RESPONSIVE (MOBILES ET TABLETTES) === */
 @media (max-width: 980px) {
+	/* Casse la grille en 1 seule colonne : le Hero au-dessus, le Form en-dessous */
 	.login-page {
 		grid-template-columns: 1fr;
 		background: linear-gradient(180deg, #0f172a 0%, #111827 42%, #f8fafc 42%, #f8fafc 100%);

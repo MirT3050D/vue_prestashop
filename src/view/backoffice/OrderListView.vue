@@ -3,16 +3,21 @@
     <h1>Liste des Commandes</h1>
     <p>Consultez et mettez à jour l'état des commandes récentes.</p>
 
+    <!-- Affichage pendant le chargement des commandes -->
     <div v-if="isLoading" class="loading-state">
       <Loading :is-loading="true" />
       <p>Chargement des commandes...</p>
     </div>
 
+    <!-- Affichage en cas d'erreur de récupération -->
     <div v-else-if="error" class="error-state">
       <p>Erreur lors du chargement des commandes : {{ error }}</p>
     </div>
 
+    <!-- Contenu principal : Liste des commandes -->
     <div v-else class="order-table-container">
+      
+      <!-- Barre de filtres (Recherche texte + Filtrage par statut) -->
       <div class="filters-bar">
         <input type="text" v-model="searchQuery" placeholder="Rechercher par ID, Réf, Client..." class="search-input" />
         <select v-model="statusFilter" class="status-filter">
@@ -20,10 +25,12 @@
           <option v-for="state in orderStates" :key="normalizeId(state.id)" :value="normalizeId(state.id)">
             {{ getStatusName(state.id) }}
           </option>
+          <!-- Statut fictif pour les paniers non transformés en commande -->
           <option value="dans_le_panier">Dans le panier</option>
         </select>
       </div>
 
+      <!-- Tableau principal -->
       <table class="order-table">
         <thead>
           <tr>
@@ -36,11 +43,15 @@
           </tr>
         </thead>
         <tbody>
+          <!-- On boucle sur les commandes filtrées -->
           <template v-for="order in filteredOrders" :key="order.id">
+            
+            <!-- Ligne principale (Infos générales de la commande) -->
             <tr>
               <td>{{ order.id }}</td>
               <td>{{ order.reference }}</td>
               <td>
+                <!-- Si le client a un prénom, on l'affiche, sinon on affiche juste l'ID -->
                 <span v-if="order.customer && order.customer.firstname">
                   {{ order.customer.firstname }} {{ order.customer.lastname }}
                 </span>
@@ -50,26 +61,34 @@
               </td>
               <td>{{ parseFloat(order.total_paid).toFixed(2) }} €</td>
               <td>
+                <!-- Le badge coloré indiquant l'état actuel (Livré, Annulé, etc.) -->
                 <span class="status-badge" :style="{ backgroundColor: getStatusColor(order.current_state) }">
                   {{ getStatusName(order.current_state) }}
                 </span>
               </td>
               <td>
+                <!-- Sélecteur pour CHANGER l'état (Désactivé si c'est un simple panier ou si la commande est terminée/annulée) -->
                 <select v-if="!order.isCart" @change="onStatusChange(order.id, $event.target.value)" class="status-select"
                   :disabled="isUpdating[order.id] || isDeliveredState(order.current_state) || isCanceledState(order.current_state)">
                   <option disabled selected>-- Changer --</option>
+                  <!-- On ne propose que les états "cibles" pertinents configurés dans le service -->
                   <option v-for="state in targetStates" :key="normalizeId(state.id)" :value="normalizeId(state.id)">
                     {{ getStatusName(state.id) }}
                   </option>
                 </select>
                 <span v-else class="cart-label">Non modifiable</span>
+                <!-- Petit loader qui s'affiche pendant que la mise à jour s'effectue via l'API -->
                 <span v-if="isUpdating[order.id]" class="mini-loader"></span>
               </td>
             </tr>
+            
+            <!-- Ligne de détails extensible (Dropdown pour voir le contenu du panier) -->
             <tr class="order-details">
               <td colspan="6">
+                <!-- Composant Dropdown réutilisable pour afficher/masquer les détails -->
                 <Dropdown class="details-dropdown" :dropdown_title="{ label: 'Details' }">
                   <div class="details-grid">
+                    <!-- En-tête des détails -->
                     <div class="detail-row header">
                       <span>Produit</span>
                       <span>Référence</span>
@@ -79,15 +98,18 @@
                       <span>Total HT</span>
                       <span>Total TTC</span>
                     </div>
+                    <!-- Message si le panier est vide ou introuvable -->
                     <div v-if="getOrderRows(order).length === 0" class="detail-row empty">
                       Aucun détail de commande.
                     </div>
+                    <!-- Boucle sur chaque produit (ligne) de la commande -->
                     <div v-for="row in getOrderRows(order)" :key="normalizeId(row.id)" class="detail-row">
                       <span>{{ row.product_name }}</span>
                       <span>{{ row.product_reference }}</span>
                       <span>{{ row.product_quantity }}</span>
                       <span>{{ toNumber(row.unit_price_tax_excl).toFixed(2) }} €</span>
                       <span>{{ toNumber(row.unit_price_tax_incl).toFixed(2) }} €</span>
+                      <!-- Calcul automatique des totaux à la volée -->
                       <span>{{ (toNumber(row.unit_price_tax_excl) * toNumber(row.product_quantity)).toFixed(2) }} €</span>
                       <span>{{ (toNumber(row.unit_price_tax_incl) * toNumber(row.product_quantity)).toFixed(2) }} €</span>
                     </div>
@@ -103,7 +125,18 @@
 </template>
 
 <script setup>
+/**
+ * @file OrderListView.vue
+ * @description Interface listant l'intégralité des commandes de la boutique.
+ * Elle permet la recherche, le filtrage par statut, l'inspection du détail des paniers, 
+ * et la modification de l'état d'une commande (ex: passage à "Expédié").
+ * S'appuie sur le service `orderListService` pour les appels API et la logique métier.
+ */
+// ============================================================================
+// IMPORTATIONS
+// ============================================================================
 import { ref, onMounted, computed } from 'vue';
+// Import du service dédié qui centralise toute la logique complexe de gestion des commandes
 import { 
   fetchOrderListData, 
   filterOrdersList, 
@@ -116,27 +149,44 @@ import {
   getStatusColor as svcGetStatusColor,
   processOrderStatusChange
 } from '@/service/orderListService';
+
 import Loading from '@/components/Loading.vue';
 import Dropdown from '@/components/Dropdown.vue';
 
-const orders = ref([]);
-const orderStates = ref([]);
-const targetStates = ref([]);
-const isLoading = ref(true);
-const isUpdating = ref({});
-const error = ref(null);
+// ============================================================================
+// VARIABLES RÉACTIVES
+// ============================================================================
+const orders = ref([]);             // Liste complète des commandes
+const orderStates = ref([]);        // Liste de tous les états possibles (Pour le filtre)
+const targetStates = ref([]);       // Liste des états vers lesquels on peut basculer une commande
+const isLoading = ref(true);        // Indicateur de chargement global
+const isUpdating = ref({});         // Indicateur de chargement ciblé par commande { idCommande: true/false }
+const error = ref(null);            // Message d'erreur éventuel
 
+// Mappages (Dictionnaires) pour l'accès rapide aux infos des statuts sans avoir à re-boucler
 let stateNameMapping = new Map();
 let stateColorMapping = new Map();
 let stateIdByNameLower = new Map();
 
+// Variables liées à la barre de recherche/filtre
 const searchQuery = ref('');
 const statusFilter = ref('');
 
+// ============================================================================
+// PROPRIÉTÉS CALCULÉES
+// ============================================================================
+// Filtre dynamiquement la liste affichée en fonction de la recherche texte et du menu déroulant
 const filteredOrders = computed(() => {
   return filterOrdersList(orders.value, statusFilter.value, searchQuery.value);
 });
 
+// ============================================================================
+// MÉTHODES
+// ============================================================================
+
+/**
+ * Charge initialement toutes les commandes et les états depuis l'API (via le service).
+ */
 async function fetchData() {
   isLoading.value = true;
   error.value = null;
@@ -155,6 +205,9 @@ async function fetchData() {
   }
 }
 
+// Les fonctions suivantes sont de simples "ponts" (wrappers) vers le service 
+// car le Template HTML ne peut appeler que des fonctions définies dans ce script.
+
 function normalizeId(id) {
   return svcNormalizeId(id);
 }
@@ -167,10 +220,12 @@ function getOrderRows(order) {
   return svcGetOrderRows(order);
 }
 
+// Vérifie si la commande est terminée pour bloquer le sélecteur
 function isDeliveredState(stateId) {
   return svcIsDeliveredState(stateId, stateIdByNameLower);
 }
 
+// Vérifie si la commande est annulée pour bloquer le sélecteur
 function isCanceledState(stateId) {
   return svcIsCanceledState(stateId, stateIdByNameLower);
 }
@@ -183,23 +238,31 @@ function getStatusColor(stateId) {
   return svcGetStatusColor(stateId, stateColorMapping);
 }
 
+/**
+ * Fonction déclenchée quand l'admin choisit un nouveau statut dans le menu déroulant d'une commande.
+ */
 async function onStatusChange(orderId, newStateId) {
+  // Verrouille spécifiquement cette ligne de commande
   isUpdating.value[orderId] = true;
   try {
+    // Appelle l'API pour changer le statut
     const result = await processOrderStatusChange(orderId, newStateId, orders.value, stateIdByNameLower);
+    
     if (!result.success && result.error) {
       alert(result.error);
     } else if (result.success && result.orderToUpdate) {
-      // Trigger reactivity since it's inside the ref array
+      // Met à jour localement (visuellement) le statut pour éviter de recharger toute la page
       result.orderToUpdate.current_state = newStateId;
     }
   } catch (e) {
     alert(`Erreur lors de la mise à jour de la commande ${orderId}: ${e.message}`);
   } finally {
+    // Déverrouille la ligne
     isUpdating.value[orderId] = false;
   }
 }
 
+// Déclenche le téléchargement dès que le composant est monté dans le navigateur
 onMounted(fetchData);
 </script>
 

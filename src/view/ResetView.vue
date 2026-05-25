@@ -4,15 +4,21 @@ import { resetTargets as productResetTargets } from '@/service/resetTargets';
 import { resetDeclinaisonTargets } from '@/service/import';
 import { runResetForTargets } from '@/service/resetService';
 
-// Dédupliquer les targets par clé pour éviter les doublons
+// ============================================================================
+// INITIALISATION DES CIBLES (TABLES À RESET)
+// ============================================================================
+// Fusionne les cibles de suppression classiques (produits, catégories) et celles des déclinaisons
 const allTargets = [...resetDeclinaisonTargets, ...productResetTargets];
 const seenKeys = new Set();
+
+// Filtre pour retirer les doublons (si une cible apparaît dans les deux tableaux)
 const resetTargets = allTargets.filter(t => {
   if (seenKeys.has(t.key)) return false;
   seenKeys.add(t.key);
   return true;
 });
 
+// Récupère uniquement les clés des tables qui doivent être cochées par défaut
 function getDefaultSelectedKeys() {
   const keys = [];
   for (const target of resetTargets) {
@@ -23,6 +29,7 @@ function getDefaultSelectedKeys() {
   return keys;
 }
 
+// Convertit un tableau de clés ['products', 'categories'] en un tableau d'objets Target complets
 function getSelectedTargetsFromKeys(keys) {
   const selected = [];
   for (const target of resetTargets) {
@@ -33,6 +40,7 @@ function getSelectedTargetsFromKeys(keys) {
   return selected;
 }
 
+// Crée une chaîne de caractères lisible (ex: "Produits, Catégories, Images") pour l'affichage
 function getSelectedLabelFromTargets(targets) {
   const labels = [];
   for (const target of targets) {
@@ -41,42 +49,68 @@ function getSelectedLabelFromTargets(targets) {
   return labels.join(', ');
 }
 
-const selectedTargetKeys = ref(getDefaultSelectedKeys());
-const confirmationText = ref('');
-const isRunning = ref(false);
-const logs = ref([]);
+// ============================================================================
+// ÉTAT RÉACTIF (VARIABLES)
+// ============================================================================
+const selectedTargetKeys = ref(getDefaultSelectedKeys()); // Les cases cochées
+const confirmationText = ref(''); // Ce que l'utilisateur tape dans l'input de confirmation ("RESET")
+const isRunning = ref(false);     // Verrou empêchant de cliquer 2 fois
+const logs = ref([]);             // Tableau contenant l'historique des actions (Le journal)
 
+// Computed properties pour mettre à jour l'interface automatiquement quand l'utilisateur coche/décoche
 const selectedTargets = computed(() => getSelectedTargetsFromKeys(selectedTargetKeys.value));
 const selectedLabel = computed(() => getSelectedLabelFromTargets(selectedTargets.value));
+
+// Règle stricte: Pour avoir le droit de lancer le script, il faut :
+// 1. Au moins 1 table sélectionnée.
+// 2. Avoir tapé "RESET" (Peu importe les majuscules grâce à toUpperCase).
+// 3. Ne pas être déjà en train de tourner.
 const canRun = computed(() => {
   return selectedTargets.value.length > 0 && confirmationText.value.trim().toUpperCase() === 'RESET' && !isRunning.value;
 });
 
+// ============================================================================
+// MÉTHODES
+// ============================================================================
+/**
+ * Ajoute un message de Log dans le tableau.
+ * Il est inséré au début (unshift) pour que les messages récents soient en haut.
+ */
 function addLog(level, message) {
   logs.value.unshift({
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    level,
+    level, // 'info', 'success', 'error'
     message
   });
 }
 
+/**
+ * Méthode principale appelée lors du clic sur le bouton rouge.
+ */
 async function runReset() {
   if (!canRun.value) {
     return;
   }
 
   isRunning.value = true;
-  logs.value = [];
+  logs.value = []; // Vide le journal précédent
 
   try {
     addLog('info', `Tables selectionnees: ${selectedLabel.value}.`);
+    
+    // Appel du service 'resetService' qui va faire le sale boulot via l'API
+    // On lui passe 'addLog' en paramètre pour qu'il puisse écrire dans le journal lui-même
     await runResetForTargets(selectedTargets.value, addLog);
+    
     addLog('success', 'Reset termine.');
   } finally {
-    isRunning.value = false;
+    isRunning.value = false; // Quoi qu'il arrive (succès ou crash), on libère le bouton
   }
 }
 
+/**
+ * Coche ou décoche toutes les cases d'un coup.
+ */
 function toggleAllTargets(event) {
   selectedTargetKeys.value = event.target.checked ? resetTargets.map((target) => target.key) : [];
 }
@@ -84,6 +118,8 @@ function toggleAllTargets(event) {
 
 <template>
   <div class="reset-page">
+    
+    <!-- 1. Bannière d'avertissement rouge/bleue (Hero) -->
     <section class="hero-card">
       <div>
         <p class="eyebrow">Reset PrestaShop</p>
@@ -92,20 +128,23 @@ function toggleAllTargets(event) {
           Selectionne les tables a nettoyer, confirme l'action, puis lance la suppression entite par entite.
         </p>
       </div>
-
       <div class="warning-box">
         <strong>Action destructive</strong>
         <span>Aucun truncate n'est utilise. Le reset passe uniquement par les DELETE de l'API officielle.</span>
       </div>
     </section>
 
+    <!-- 2. Grille principale divisée en deux (Liste à gauche, Bouton d'action à droite) -->
     <section class="content-grid">
+      
+      <!-- Colonne de Gauche : Liste des tables (Catégories, Produits, etc.) -->
       <div class="panel">
         <div class="panel-header">
           <div>
             <p class="panel-kicker">Tables a reinitialiser</p>
             <h2>Choix precis des entites</h2>
           </div>
+          <!-- Option Tout cocher -->
           <label class="toggle-all">
             <input type="checkbox" :checked="selectedTargetKeys.length === resetTargets.length" @change="toggleAllTargets" />
             <span>Tout selectionner</span>
@@ -113,6 +152,7 @@ function toggleAllTargets(event) {
         </div>
 
         <div class="target-list">
+          <!-- Boucle générant chaque ligne avec une case à cocher (v-model="selectedTargetKeys") -->
           <label v-for="target in resetTargets" :key="target.key" class="target-item">
             <input v-model="selectedTargetKeys" type="checkbox" :value="target.key" />
             <div>
@@ -122,6 +162,7 @@ function toggleAllTargets(event) {
               </div>
               <p>
                 {{ target.defaultSelected ? 'Selectionnee par defaut.' : 'Optionnelle.' }}
+                <!-- Affiche si certains IDs vitaux sont protégés contre la suppression (Ex: Catégorie Racine) -->
                 <span v-if="target.skipIds.length"> IDs exclus: {{ target.skipIds.join(', ') }}.</span>
               </p>
             </div>
@@ -129,15 +170,18 @@ function toggleAllTargets(event) {
         </div>
       </div>
 
+      <!-- Colonne de Droite : Validation et Lancement (Sticky, reste figée au scroll) -->
       <div class="panel sticky">
         <p class="panel-kicker">Controle</p>
         <h2>Validation avant execution</h2>
 
+        <!-- Sécurité : L'utilisateur doit taper 'RESET' manuellement -->
         <label class="field">
           <span>Retape RESET pour confirmer</span>
           <input v-model="confirmationText" type="text" placeholder="RESET" />
         </label>
 
+        <!-- Résumé chiffré -->
         <div class="summary">
           <div>
             <span>Tables retenues</span>
@@ -149,6 +193,7 @@ function toggleAllTargets(event) {
           </div>
         </div>
 
+        <!-- LE Bouton rouge de la mort -->
         <button class="run-button" type="button" :disabled="!canRun" @click="runReset">
           {{ isRunning ? 'Reset en cours...' : 'Lancer le reset' }}
         </button>
@@ -159,6 +204,7 @@ function toggleAllTargets(event) {
       </div>
     </section>
 
+    <!-- 3. Zone du bas : Le terminal / journal d'activité en temps réel -->
     <section class="panel log-panel">
       <p class="panel-kicker">Journal</p>
       <h2>Resultats du reset</h2>
@@ -168,6 +214,7 @@ function toggleAllTargets(event) {
       </div>
 
       <ul v-else class="log-list">
+        <!-- Chaque ligne prend une couleur selon son level (info = gris, success = vert, error = rouge) -->
         <li v-for="entry in logs" :key="entry.id" :class="`log-${entry.level}`">
           {{ entry.message }}
         </li>
@@ -177,6 +224,7 @@ function toggleAllTargets(event) {
 </template>
 
 <style scoped>
+/* Design général typique d'une interface d'administration système */
 .reset-page {
   display: grid;
   gap: 24px;
@@ -199,6 +247,7 @@ function toggleAllTargets(event) {
   color: #eff6ff;
 }
 
+/* Surtitre */
 .eyebrow,
 .panel-kicker {
   margin: 0 0 10px;
@@ -233,9 +282,10 @@ function toggleAllTargets(event) {
 
 .content-grid {
   display: grid;
+  /* 1.6 fraction pour la liste, 0.9 pour le panneau de contrôle */
   grid-template-columns: minmax(0, 1.6fr) minmax(320px, 0.9fr);
   gap: 24px;
-  align-items: start;
+  align-items: start; /* Empêche le panneau de droite de s'étirer en hauteur */
 }
 
 .panel {
@@ -296,6 +346,7 @@ function toggleAllTargets(event) {
   color: #475569;
 }
 
+/* Le bloc de droite reste visible même si on scrolle loin dans la liste */
 .sticky {
   position: sticky;
   top: 24px;
@@ -349,7 +400,7 @@ function toggleAllTargets(event) {
   border: none;
   border-radius: 16px;
   padding: 14px 16px;
-  background: linear-gradient(135deg, #dc2626, #ef4444);
+  background: linear-gradient(135deg, #dc2626, #ef4444); /* Rouge Danger */
   color: white;
   font-weight: 700;
   cursor: pointer;
@@ -387,6 +438,7 @@ function toggleAllTargets(event) {
   border: 1px solid #e2e8f0;
 }
 
+/* Couleurs des messages du journal */
 .log-info {
   color: #0f172a;
 }
@@ -403,6 +455,7 @@ function toggleAllTargets(event) {
   border-color: #fecaca;
 }
 
+/* Sur tablette, on empile les colonnes et on enlève l'effet sticky */
 @media (max-width: 960px) {
   .hero-card,
   .content-grid {

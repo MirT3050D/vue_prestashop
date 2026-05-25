@@ -5,12 +5,17 @@ import { getCategories } from '@/service/categoryService';
 import { getStockAvailables } from '@/service/stockService';
 
 /**
- * Convertit une date en clé d'intervalle selon l'agrégation choisie.
- * @param {string} dateString - La date au format string (ex: "2024-01-15 10:30:00")
- * @param {string} aggregationInterval - L'intervalle : 'daily', 'weekly', 'monthly', 'yearly'
- * @returns {string|null} La clé de date formatée ou null si invalide
+ * Fonction de classification temporelle.
+ * Convertit une date brute (ex: "2024-01-15 10:30:00") en une clé d'agrégation "propre" 
+ * selon la vue voulue (daily, weekly, monthly, yearly).
+ * Ex: si monthly -> "2024-01-01". Permet de regrouper facilement toutes les ventes de janvier.
+ * 
+ * @param {string} dateString - La date au format SQL ou ISO
+ * @param {string} aggregationInterval - Le regroupement (ex: 'monthly')
+ * @returns {string|null} La clé formatée (ex: '2024-01-01')
  */
 export function getIntervalKey(dateString, aggregationInterval) {
+    // Normalise la date pour le parser JS (Remplace l'espace SQL par un T ISO)
     const d = new Date(dateString.replace(' ', 'T'));
 
     if (isNaN(d.getTime())) {
@@ -26,47 +31,50 @@ export function getIntervalKey(dateString, aggregationInterval) {
     }
 
     if (aggregationInterval === 'yearly') {
-        return y + '-01-01';
+        return y + '-01-01'; // Renvoie le 1er janvier de l'année
     }
 
     if (aggregationInterval === 'monthly') {
-        return y + '-' + m + '-01';
+        return y + '-' + m + '-01'; // Renvoie le 1er jour du mois
     }
 
     if (aggregationInterval === 'weekly') {
         let day = d.getDay();
         if (day === 0) {
-            day = 7; // Le dimanche (0) devient 7
+            day = 7; // Le dimanche (0 en JS) devient 7 (logique ISO)
         }
-        d.setHours(-24 * (day - 1)); // Reculer les jours jusqu'au lundi
+        // Mathématique: Recule la date pour atterrir sur le lundi de la semaine courante
+        d.setHours(-24 * (day - 1)); 
         return d.toISOString().slice(0, 10);
     }
 
+    // Daily par défaut
     return d.toISOString().slice(0, 10);
 }
 
 /**
- * Filtre les commandes par plage de dates.
- * @param {Array} orders - Les commandes brutes
- * @param {string} startDate - Date de début (YYYY-MM-DD)
- * @param {string} endDate - Date de fin (YYYY-MM-DD)
- * @returns {Array} Les commandes filtrées
+ * Filtre un tableau de commandes pour ne garder que celles situées entre deux dates.
+ * 
+ * @param {Array} orders - Tableau des commandes à filtrer
+ * @param {string} startDate - Date de début min (YYYY-MM-DD)
+ * @param {string} endDate - Date de fin max (YYYY-MM-DD)
  */
 export function filterOrdersByDate(orders, startDate, endDate) {
     return orders.filter(function (o) {
+        // Extrait uniquement la partie "date" (excluant l'heure)
         const d = extractText(o.date_add).slice(0, 10);
 
         let isAfterStart = true;
         if (startDate) {
             if (d < startDate) {
-                isAfterStart = false;
+                isAfterStart = false; // Trop ancien
             }
         }
 
         let isBeforeEnd = true;
         if (endDate) {
             if (d > endDate) {
-                isBeforeEnd = false;
+                isBeforeEnd = false; // Trop récent
             }
         }
 
@@ -75,12 +83,14 @@ export function filterOrdersByDate(orders, startDate, endDate) {
 }
 
 /**
- * Agrège les commandes filtrées en statistiques de vente par intervalle de temps.
+ * Le "Moteur de KPI" pour les graphiques de Chiffre d'Affaires.
+ * Prend un tableau brut de commandes et calcule le nombre de commandes et le CA généré pour chaque intervalle.
+ * 
  * @param {Array} orders - Les commandes brutes
- * @param {string} startDate - Date de début (YYYY-MM-DD)
- * @param {string} endDate - Date de fin (YYYY-MM-DD)
- * @param {string} aggregationInterval - L'intervalle : 'daily', 'weekly', 'monthly', 'yearly'
- * @returns {Array} Tableau trié de {date, nb_commande, CA}
+ * @param {string} startDate - Date de début
+ * @param {string} endDate - Date de fin
+ * @param {string} aggregationInterval - Ex: 'monthly'
+ * @returns {Array} Tableau de statistiques prêt pour Chart.js (trié de la date la plus récente à la plus ancienne)
  */
 export function computeSalesStats(orders, startDate, endDate, aggregationInterval) {
     const filtered = filterOrdersByDate(orders, startDate, endDate);
@@ -89,35 +99,36 @@ export function computeSalesStats(orders, startDate, endDate, aggregationInterva
     // Remplacement de "for...of" par une boucle for classique
     for (let i = 0; i < filtered.length; i++) {
         const o = filtered[i];
+        // Demande la clé à utiliser pour la date
         const key = getIntervalKey(extractText(o.date_add), aggregationInterval);
 
         if (!key) {
-            continue; // Passe directement à la prochaine commande
+            continue; // Ignore si date corrompue
         }
 
+        // Si la case mémoire (Ex: '2024-01-01') n'existe pas, on l'initialise
         if (!stats[key]) {
             stats[key] = { date: key, nb_commande: 0, CA: 0 };
         }
 
+        // Incrémente le compteur et le tiroir-caisse
         stats[key].nb_commande += 1;
         stats[key].CA += toNumber(o.total_paid_tax_incl);
     }
 
     const statsArray = Object.values(stats);
 
-    // Remplacement de la fonction fléchée dans le sort()
+    // Tri décroissant sur la date
     return statsArray.sort(function (a, b) {
         return b.date.localeCompare(a.date);
     });
 }
 
 /**
- * Extrait les N meilleurs produits vendus dans la plage de dates.
- * @param {Array} orders - Les commandes brutes
- * @param {string} startDate - Date de début (YYYY-MM-DD)
- * @param {string} endDate - Date de fin (YYYY-MM-DD)
- * @param {number} limit - Nombre de produits à retourner (défaut: 5)
- * @returns {Array} Tableau de {id, nom, reference, ventes, ca}
+ * Algorithme "Best-Sellers" : Parcourt les entrailles de chaque commande (order_row)
+ * pour compter le nombre de fois qu'un produit précis a été vendu, et le classe.
+ * 
+ * @param {number} limit - Nombre de produits du Top (ex: Top 5)
  */
 export function computeTopProducts(orders, startDate, endDate, limit) {
     if (limit === undefined || limit === null) {
@@ -127,21 +138,22 @@ export function computeTopProducts(orders, startDate, endDate, limit) {
     const filtered = filterOrdersByDate(orders, startDate, endDate);
     const stats = {};
 
+    // Double boucle: Pour chaque commande -> Pour chaque produit de la commande
     for (let i = 0; i < filtered.length; i++) {
         const o = filtered[i];
 
-        // Remplacement du "?." (optional chaining) par des vérifications "if"
+        // Extraction sécurisée des sous-noeuds produits (associations.order_rows)
         let rows = null;
         if (o.associations && o.associations.order_rows) {
             rows = o.associations.order_rows.order_row;
         }
 
-        // Remplacement du ternaire pour s'assurer qu'on a bien un tableau
+        // Normalisation
         let items = [];
         if (Array.isArray(rows)) {
             items = rows;
         } else if (rows) {
-            items = [rows]; // S'il n'y a qu'un seul objet, on le met dans un tableau
+            items = [rows];
         }
 
         for (let j = 0; j < items.length; j++) {
@@ -152,13 +164,14 @@ export function computeTopProducts(orders, startDate, endDate, limit) {
                 continue;
             }
 
+            // Init si nouveau produit rencontré
             if (!stats[id]) {
                 stats[id] = {
                     id: id,
                     nom: extractText(item.product_name),
                     reference: extractText(item.product_reference),
-                    ventes: 0,
-                    ca: 0
+                    ventes: 0, // Unités vendues
+                    ca: 0 // Euro générés
                 };
             }
 
@@ -170,21 +183,18 @@ export function computeTopProducts(orders, startDate, endDate, limit) {
 
     const statsArray = Object.values(stats);
 
+    // Tri par Volume de ventes (Les plus vendus en haut)
     const sortedArray = statsArray.sort(function (a, b) {
         return b.ventes - a.ventes;
     });
 
-    return sortedArray.slice(0, limit); // Garde seulement les N premiers
+    return sortedArray.slice(0, limit); // Troncature du tableau (slice)
 }
 
 /**
- * Calcule les statistiques de bénéfice par catégorie.
- * @param {Array} orders - Les commandes brutes
- * @param {string} startDate - Date de début (YYYY-MM-DD)
- * @param {string} endDate - Date de fin (YYYY-MM-DD)
- * @param {Object} productInfoById - Map des infos produit par ID
- * @param {Object} categoryNameById - Map des noms de catégorie par ID
- * @returns {Array} Tableau trié de stats par catégorie
+ * Calcule la rentabilité et la Marge Nette.
+ * Fait la corrélation entre les prix de ventes (dans les commandes) et le prix d'achat/grossiste (`wholesale_price`) dans la BDD.
+ * Catégorise ces profits (Ex: Je gagne plus sur les chaussures ou les chemises ?).
  */
 export function computeCategoryProfitStats(orders, startDate, endDate, productInfoById, categoryNameById) {
     const filtered = filterOrdersByDate(orders, startDate, endDate);
@@ -200,9 +210,11 @@ export function computeCategoryProfitStats(orders, startDate, endDate, productIn
             if (!productId) continue;
 
             const qty = toNumber(row.product_quantity);
+            // Ce que le client a payé
             const saleHt = toNumber(row.unit_price_tax_excl) * qty;
             const saleTtc = toNumber(row.unit_price_tax_incl) * qty;
 
+            // Ce que le marchand a payé (Prix grossiste x Qty)
             const productInfo = productInfoById[productId] || {};
             const categoryId = productInfo.categoryId || '0';
             const categoryName = categoryNameById[categoryId] || 'Sans categorie';
@@ -213,7 +225,7 @@ export function computeCategoryProfitStats(orders, startDate, endDate, productIn
                     categoryName: categoryName,
                     totalSalesHt: 0,
                     totalSalesTtc: 0,
-                    totalPurchaseHt: 0,
+                    totalPurchaseHt: 0, // Coût d'achat global
                     profit: 0
                 };
             }
@@ -225,20 +237,20 @@ export function computeCategoryProfitStats(orders, startDate, endDate, productIn
     }
 
     const statsArray = Object.values(stats);
+    // Calcul final du bénéfice pour chaque catégorie (Profit = Chiffre Affaire HT - Achat Gros HT)
     for (let k = 0; k < statsArray.length; k++) {
         const item = statsArray[k];
         item.profit = item.totalSalesHt - item.totalPurchaseHt;
     }
 
+    // Trie par catégorie la plus rentable
     return statsArray.sort(function (a, b) {
         return b.profit - a.profit;
     });
 }
 
 /**
- * Calcule les totaux à partir des statistiques de bénéfice par catégorie.
- * @param {Array} categoryProfitStats - Tableau de stats par catégorie
- * @returns {Object} {totalSalesHt, totalSalesTtc, totalPurchaseHt, totalProfit}
+ * Condense les statistiques de catégorie en un seul grand bloc Total Récapitulatif.
  */
 export function computeTotals(categoryProfitStats) {
     let totalSalesHt = 0;
@@ -262,17 +274,14 @@ export function computeTotals(categoryProfitStats) {
 }
 
 /**
- * Calcule le prix d'achat total du stock + vendu.
- * @param {Array} allProducts - Tous les produits
- * @param {Array} allStocks - Tous les stocks
- * @param {Array} orders - Les commandes brutes
- * @param {string} startDate - Date de début (YYYY-MM-DD)
- * @param {string} endDate - Date de fin (YYYY-MM-DD)
- * @returns {number} Le total du prix d'achat HT
+ * Outil d'inventaire financier.
+ * "Quelle est la valeur d'achat théorique de tout mon magasin ?" (Ce qu'il y a en stock + Ce que j'ai déjà vendu).
+ * Multiplie le prix grossiste de CHAQUE produit par l'addition de (En Stock + Vendu).
  */
 export function computeTotalStockPurchaseHt(allProducts, allStocks, orders, startDate, endDate) {
     const filtered = filterOrdersByDate(orders, startDate, endDate);
 
+    // 1. Crée un dictionnaire [ID produit] -> Prix d'Achat
     const wholesalePriceById = {};
     for (let i = 0; i < allProducts.length; i++) {
         const p = allProducts[i];
@@ -280,6 +289,7 @@ export function computeTotalStockPurchaseHt(allProducts, allStocks, orders, star
         wholesalePriceById[pid] = toNumber(extractText(p.wholesale_price));
     }
 
+    // 2. Crée un dictionnaire [ID produit] -> Quantité stockée (hors déclinaisons complexes pour simplifier)
     const stockQtyById = {};
     for (let i = 0; i < allStocks.length; i++) {
         const s = allStocks[i];
@@ -290,6 +300,7 @@ export function computeTotalStockPurchaseHt(allProducts, allStocks, orders, star
         }
     }
 
+    // 3. Crée un dictionnaire [ID produit] -> Quantité Vendue
     const soldQtyById = {};
     for (let i = 0; i < filtered.length; i++) {
         const o = filtered[i];
@@ -304,6 +315,7 @@ export function computeTotalStockPurchaseHt(allProducts, allStocks, orders, star
         }
     }
 
+    // 4. Calcul Financier Final
     let total = 0;
     for (let i = 0; i < allProducts.length; i++) {
         const p = allProducts[i];
@@ -311,6 +323,7 @@ export function computeTotalStockPurchaseHt(allProducts, allStocks, orders, star
         const wholesalePrice = wholesalePriceById[pid] || 0;
         const stockQty = stockQtyById[pid] || 0;
         const soldQty = soldQtyById[pid] || 0;
+        // Total = Prix d'achat x (Ce que j'ai + Ce que j'ai donné au client)
         total += wholesalePrice * (stockQty + soldQty);
     }
 
@@ -318,17 +331,22 @@ export function computeTotalStockPurchaseHt(allProducts, allStocks, orders, star
 }
 
 /**
- * Orchestre le chargement de toutes les données du dashboard.
- * Récupère les commandes, produits, stocks en parallèle puis charge les détails.
- * @returns {Object} {orders, allProducts, allStocks, productInfoById, categoryNameById, dateRange}
+ * Fonction Architecte Initiale.
+ * Le Dashboard est très lourd à charger, cette fonction orchestre et rassemble les dizaines de requêtes API
+ * (Orders, Products, Stocks, Categories, Infos unitaires) en un seul gros package (Dictionnaires et Tableaux)
+ * prêt à être mouliné par les fonctions compute() sans jamais refaire d'appel réseau.
+ * 
+ * @returns {Promise<Object>} Un bloc de données massif (state initial du Dashboard)
  */
 export async function fetchDashboardData() {
+    // Phase 1 : Extraction parallèle des gros blocs de données avec filtrage réseau limitant la charge
     const [orders, productsData, stocksData] = await Promise.all([
         getOrders({ display: 'full' }),
         getProducts('display=[id,wholesale_price]'),
         getStockAvailables('display=[id_product,id_product_attribute,quantity]')
     ]);
 
+    // Filtrage: On exclut directement les commandes au statut 6 (Souvent "Annulé")
     const rawOrders = orders.filter(function (o) {
         return extractText(o.current_state) !== '6';
     });
@@ -336,12 +354,12 @@ export async function fetchDashboardData() {
     const allProducts = productsData;
     const allStocks = stocksData;
 
-    // Calculer la plage de dates
+    // Calculer la plage de dates absolue existante en BDD
     let dateStart = '';
     let dateEnd = '';
 
     if (rawOrders.length > 0) {
-        // Remplacement de la fonction fléchée dans le map()
+        // Liste toutes les dates de la table
         const dates = rawOrders.map(function (o) {
             const dateStr = extractText(o.date_add);
             if (dateStr) {
@@ -350,7 +368,6 @@ export async function fetchDashboardData() {
             return null;
         });
 
-        // Remplacement du "filter(Boolean)" par une condition explicite
         const validDates = dates.filter(function (date) {
             if (date !== null && date !== '') {
                 return true;
@@ -359,15 +376,17 @@ export async function fetchDashboardData() {
             }
         });
 
+        // Tri naturel alphabétique (qui marche sur YYYY-MM-DD)
         validDates.sort();
 
+        // Plus ancienne vs Plus récente
         if (validDates.length > 0) {
             dateStart = validDates[0];
             dateEnd = validDates[validDates.length - 1];
         }
     }
 
-    // Charger les infos produit
+    // Constitution d'un dictionnaire d'IDs de produits uniques qui ont été vendus au moins une fois
     const productIds = {};
     for (let i = 0; i < rawOrders.length; i++) {
         const rows = getOrderRows(rawOrders[i]);
@@ -378,7 +397,10 @@ export async function fetchDashboardData() {
     }
 
     const ids = Object.keys(productIds);
-    const infoMap = {};
+    const infoMap = {}; // Cache des données détaillées produit
+    
+    // Pour chaque produit vendu, on récupère son prix d'achat, nom, et catégorie
+    // Note technique: Boucle asynchrone synchrone (await dans un for). C'est lent. Pour optimiser, un Promise.all(map) serait préférable
     for (let i = 0; i < ids.length; i++) {
         const pid = ids[i];
         try {
@@ -395,7 +417,7 @@ export async function fetchDashboardData() {
         }
     }
 
-    // Charger les catégories
+    // Constitution du cache des noms de catégories
     const categoryMap = {};
     try {
         const cats = await getCategories('display=[id,name]');
@@ -408,6 +430,7 @@ export async function fetchDashboardData() {
         // Keep empty map if categories fail
     }
 
+    // Le gros paquet cadeau pour l'UI
     return {
         orders: rawOrders,
         allProducts: allProducts,

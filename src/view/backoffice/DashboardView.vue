@@ -1,38 +1,73 @@
 <script setup>
+/**
+ * @file DashboardView.vue
+ * @description Vue principale du tableau de bord de l'administration (Back-Office).
+ * Elle affiche une synthèse des ventes, bénéfices (brut et incluant le stock dormant),
+ * ainsi qu'un résumé détaillé de la rentabilité par catégorie.
+ * Remarque architecturale : Tous les calculs mathématiques lourds sont déportés dans `service/dashboardService.js`.
+ */
+// ============================================================================
+// IMPORTATIONS
+// ============================================================================
 import { computed, onMounted, ref } from 'vue';
+// Import des utilitaires de nettoyage pour l'API PrestaShop
 import { extractText, toNumber, getLanguageText, normalizeArray, getOrderRows, formatMoney } from '@/service/prestashopUtils';
+// Import des services métier (Les vrais calculs complexes se font là-bas pour alléger la vue)
 import { fetchDashboardData, filterOrdersByDate, computeSalesStats, computeTopProducts, computeCategoryProfitStats, computeTotals, computeTotalStockPurchaseHt } from '@/service/dashboardService';
+
+// Composants enfants
 import StatistiqueVente from '@/components/backoffice/StatistiqueVente.vue';
 import MeilleurProduit from '@/components/backoffice/MeilleurProduit.vue';
 import Loading from '@/components/Loading.vue';
 
-const rawOrders = ref([]);
-const allProducts = ref([]);
-const allStocks = ref([]);
-const startDate = ref('');
-const endDate = ref('');
-const aggregationInterval = ref('daily');
-const productInfoById = ref({});
-const categoryNameById = ref({});
-const isRefreshing = ref(false);
-const isLoading = ref(true);
+// ============================================================================
+// VARIABLES RÉACTIVES (ÉTAT DU COMPOSANT)
+// ============================================================================
+const rawOrders = ref([]);         // Liste brute de toutes les commandes
+const allProducts = ref([]);       // Liste de tous les produits
+const allStocks = ref([]);         // Liste de tous les stocks
+const startDate = ref('');         // Filtre : Date de début
+const endDate = ref('');           // Filtre : Date de fin
+const aggregationInterval = ref('daily'); // Regroupement (Jour, Semaine, Mois)
+const productInfoById = ref({});   // Dictionnaire { idProduit: infos... } pour un accès ultra-rapide
+const categoryNameById = ref({});  // Dictionnaire { idCategory: nom }
+const isRefreshing = ref(false);   // État du bouton rafraîchir
+const isLoading = ref(true);       // État du chargement initial
 
+// ============================================================================
+// PROPRIÉTÉS CALCULÉES (COMPUTED)
+// ============================================================================
+// Ces variables se mettent à jour automatiquement si startDate ou endDate changent
+
+/**
+ * Garde uniquement les commandes qui tombent dans la période sélectionnée.
+ */
 const filteredOrders = computed(function () {
   return filterOrdersByDate(rawOrders.value, startDate.value, endDate.value);
 });
 
+/**
+ * Génère les données pour le graphique "Statistiques de Ventes" (Le tableau chronologique).
+ */
 const salesStats = computed(function () {
   return computeSalesStats(filteredOrders.value, '', '', aggregationInterval.value);
 });
 
+/**
+ * Calcule le Top 5 des produits les plus vendus.
+ */
 const topProducts = computed(function () {
   return computeTopProducts(filteredOrders.value, '', '', 5);
 });
 
+/**
+ * Calcule le bénéfice, découpé par catégorie (T-Shirts, Mugs, etc.).
+ */
 const categoryProfitStats = computed(function () {
   return computeCategoryProfitStats(filteredOrders.value, '', '', productInfoById.value, categoryNameById.value);
 });
 
+// -- CALCULS DES TOTAUX GLOBAUX --
 const totalSalesHt = computed(function () {
   let total = 0;
   const list = categoryProfitStats.value;
@@ -60,18 +95,27 @@ const totalPurchaseHt = computed(function () {
   return total;
 });
 
+// Bénéfice net (Ventes HT - Prix d'achat des produits vendus)
 const totalProfit = computed(function () {
   return totalSalesHt.value - totalPurchaseHt.value;
 });
 
+// Coût total de TOUT le stock (Vendu ou non)
 const totalStockPurchaseHt = computed(function () {
   return computeTotalStockPurchaseHt(allProducts.value, allStocks.value, filteredOrders.value, '', '');
 });
 
+// Bénéfice net tenant compte du stock dormant (Ventes HT - Coût total du stock global)
 const totalStockProfit = computed(function () {
   return totalSalesHt.value - totalStockPurchaseHt.value;
 });
 
+// ============================================================================
+// MÉTHODES
+// ============================================================================
+/**
+ * Télécharge toutes les données vitales au Dashboard depuis l'API.
+ */
 async function fetchData() {
   isLoading.value = true;
   try {
@@ -83,6 +127,7 @@ async function fetchData() {
     productInfoById.value = data.productInfoById;
     categoryNameById.value = data.categoryNameById;
 
+    // Si on vient d'arriver, on initialise les dates par défaut suggérées par le service
     if (data.dateRange && !startDate.value) {
       startDate.value = data.dateRange.start;
       endDate.value = data.dateRange.end;
@@ -92,6 +137,9 @@ async function fetchData() {
   }
 }
 
+/**
+ * Bouton pour forcer un rafraîchissement sans recharger la page.
+ */
 async function handleRefresh() {
   if (isRefreshing.value) return;
   isRefreshing.value = true;
@@ -102,40 +150,52 @@ async function handleRefresh() {
   }
 }
 
+// Lors de l'ouverture de la page
 onMounted(fetchData);
 </script>
 
 <template>
   <div class="dashboard-page">
+    
+    <!-- En-tête + Filtres -->
     <header class="header-banner">
       <h1>Statistiques de Ventes</h1>
+      
+      <!-- Zone de filtres (Dates + Regroupement) -->
       <div class="filters">
         <input type="date" v-model="startDate">
         <span>→</span>
         <input type="date" v-model="endDate">
+        
         <select v-model="aggregationInterval" class="select-interval">
           <option value="daily">Journalier</option>
           <option value="weekly">Hebdomadaire</option>
           <option value="monthly">Mensuel</option>
           <option value="yearly">Annuel</option>
         </select>
+        
         <button class="btn-refresh" type="button" :disabled="isRefreshing" @click="handleRefresh">
           {{ isRefreshing ? 'Chargement...' : 'Actualiser' }}
         </button>
       </div>
     </header>
 
+    <!-- Roue de chargement plein écran si les données ne sont pas prêtes -->
     <div v-if="isLoading" class="loading-container">
       <Loading :isLoading="isLoading" />
       <p>Chargement des statistiques...</p>
     </div>
 
+    <!-- Contenu du Dashboard (Une fois chargé) -->
     <div v-else>
+      
+      <!-- Section Haut : 2 graphiques (Historique des ventes / Top 5 Produits) -->
       <div class="main-content">
         <StatistiqueVente :stats="salesStats" />
         <MeilleurProduit :produits="topProducts" />
       </div>
 
+      <!-- Section Milieu : Tuiles des indicateurs financiers -->
       <section class="summary-section">
         <div class="summary-card">
           <p>Ventes HT</p>
@@ -163,6 +223,7 @@ onMounted(fetchData);
         </div>
       </section>
 
+      <!-- Section Bas : Répartition par catégorie -->
       <section class="category-profit">
         <h2>Benefice par categorie</h2>
         <div class="category-list">
@@ -182,13 +243,15 @@ onMounted(fetchData);
 </template>
 
 <style scoped>
+/* === LAYOUT GLOBAL === */
 .dashboard-page {
   padding: 30px;
-  background: #f4f7fa;
+  background: #f4f7fa; /* Gris très clair, style "Dashboard" */
   min-height: 100vh;
   font-family: 'Inter', sans-serif;
 }
 
+/* === EN-TÊTE NOIR AVEC FILTRES === */
 .header-banner {
   display: flex;
   justify-content: space-between;
@@ -222,6 +285,7 @@ onMounted(fetchData);
   outline: none;
 }
 
+/* S'assure que le menu déroulant reste lisible (le fond des options ne peut pas être semi-transparent) */
 .select-interval option {
   background: #1e293b;
   color: white;
@@ -241,13 +305,15 @@ onMounted(fetchData);
   background: #2563eb;
 }
 
+/* === SECTION DES GRAPHIQUES === */
 .main-content {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); /* Les deux cartes se mettent côte à côte ou s'empilent si l'écran est trop petit */
   gap: 25px;
   align-items: start;
 }
 
+/* === TUILES DE RÉSUMÉ (KPI) === */
 .summary-section {
   margin-top: 25px;
   display: grid;
@@ -274,10 +340,17 @@ onMounted(fetchData);
   color: #0f172a;
 }
 
+/* Tuile spéciale "Bénéfice" (Bordure verte) */
 .summary-card.highlight {
   border: 2px solid #22c55e;
 }
 
+/* Tuile spéciale "Bénéfice Total" (Bordure violette) */
+.summary-card.highlight-purple {
+  border: 2px solid #a855f7;
+}
+
+/* === LISTE PAR CATÉGORIES === */
 .category-profit {
   margin-top: 24px;
   background: #ffffff;
@@ -324,10 +397,7 @@ onMounted(fetchData);
   color: #16a34a;
 }
 
-.summary-card.highlight-purple {
-  border: 2px solid #a855f7;
-}
-
+/* === CHARGEMENT === */
 .loading-container {
   display: flex;
   flex-direction: column;

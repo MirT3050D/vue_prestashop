@@ -8,6 +8,7 @@
 /**
  * Extrait le texte d'un nœud XML PrestaShop.
  * Gère les cas : objet avec #text, string, number, null/undefined.
+ * Très utile car "fast-xml-parser" renvoie souvent des structures imprévisibles.
  */
 export function extractText(value) {
     if (value === null || value === undefined) return '';
@@ -23,7 +24,7 @@ export function extractText(value) {
 }
 
 /**
- * Alias sécurisé de extractText, pour compatibilité.
+ * Alias sécurisé de extractText, pour compatibilité avec d'anciens composants.
  */
 export function safeValue(node) {
     if (node === undefined || node === null) return '';
@@ -44,7 +45,7 @@ export function extractId(node) {
 }
 
 /**
- * Normalise un ID en string.
+ * Normalise un ID en string pour s'assurer qu'il peut être utilisé dans des URLs.
  */
 export function normalizeId(id) {
     if (id && typeof id === 'object') return String(id['#text'] ?? id);
@@ -52,7 +53,8 @@ export function normalizeId(id) {
 }
 
 /**
- * Convertit une valeur en nombre (gère les virgules comme séparateur décimal).
+ * Convertit une valeur en nombre de façon robuste.
+ * (gère les virgules comme séparateur décimal, ce qui est fréquent en saisie française).
  */
 export function toNumber(v) {
     if (v == null) return 0;
@@ -63,6 +65,7 @@ export function toNumber(v) {
 
 /**
  * Extrait le texte multilingue d'un champ PrestaShop (language node).
+ * PrestaShop renvoie souvent: { language: { '@_id': '1', '#text': 'T-Shirt' } }
  */
 export function getLangText(field) {
     if (!field || !field.language) return '';
@@ -71,7 +74,7 @@ export function getLangText(field) {
 }
 
 /**
- * Extrait le texte multilingue avec fallbacks.
+ * Extrait le texte multilingue avec des fallbacks (Solution de secours).
  * Gère : string, number, array, object avec #text/language.
  */
 export function getLanguageText(node) {
@@ -93,6 +96,8 @@ export function getLanguageText(node) {
 
 /**
  * Garantit qu'un nœud est un tableau (normalise les réponses XML single-item).
+ * Si PrestaShop ne renvoie qu'un produit, c'est un objet. S'il en renvoie deux, c'est un Array.
+ * Cette fonction enveloppe l'objet unique dans un Array pour utiliser .map() ou .forEach().
  */
 export function normalizeArray(node) {
     if (!node) return [];
@@ -100,7 +105,7 @@ export function normalizeArray(node) {
 }
 
 /**
- * Extrait les lignes d'une commande (order_rows).
+ * Extrait de façon sécurisée les lignes de produits d'une commande (order_rows).
  */
 export function getOrderRows(order) {
     if (!order || !order.associations || !order.associations.order_rows) return [];
@@ -108,7 +113,7 @@ export function getOrderRows(order) {
 }
 
 /**
- * Extrait les lignes d'un panier (cart_rows).
+ * Extrait de façon sécurisée les lignes de produits d'un panier (cart_rows).
  */
 export function getCartRows(cart) {
     const assoc = cart?.associations;
@@ -118,7 +123,7 @@ export function getCartRows(cart) {
 }
 
 /**
- * Formate un nombre en montant monétaire (2 décimales).
+ * Formate un nombre en montant monétaire avec toujours 2 décimales (ex: 15.00).
  */
 export function formatMoney(value) {
     const amount = Number(value) || 0;
@@ -126,7 +131,7 @@ export function formatMoney(value) {
 }
 
 /**
- * Formate une date en chaîne locale française.
+ * Formate une date brute (ISO ou SQL) en chaîne locale française (ex: 12 janvier 2024).
  */
 export function formatDate(value) {
     if (!value) return '';
@@ -142,7 +147,8 @@ export function formatDate(value) {
 }
 
 /**
- * Extrait les items d'une collection XML PrestaShop.
+ * Extrait dynamiquement les éléments d'une collection XML PrestaShop.
+ * Utilisé par les hooks génériques ou les Tableaux de bord.
  */
 export function getCollectionItems(payload, target) {
     if (!payload || !payload.prestashop) return [];
@@ -154,7 +160,7 @@ export function getCollectionItems(payload, target) {
 }
 
 /**
- * Extrait l'ID d'un item de collection (gère @_id, id, @id).
+ * Extrait l'ID d'un élément de collection dynamique.
  */
 export function extractItemId(item) {
     if (!item) return null;
@@ -168,14 +174,15 @@ export function extractItemId(item) {
 }
 
 /**
- * Normalise le texte d'un formulaire (extractText + trim).
+ * Nettoie le texte entré par l'utilisateur (espaces en trop) et extrait la valeur si c'est un objet XML.
  */
 export function normalizeFormText(value) {
     return extractText(value).trim();
 }
 
 /**
- * Extrait le nom de catégorie depuis un map.
+ * Rapatrie le nom de la catégorie depuis un dictionnaire de Cache (Map).
+ * Retourne "Sans categorie" si non trouvé.
  */
 export function getCategoryName(categoryId, categoryMap) {
     if (!categoryId) return 'Sans categorie';

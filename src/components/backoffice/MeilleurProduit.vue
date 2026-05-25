@@ -1,31 +1,35 @@
 <template>
+    <!-- Carte d'affichage des statistiques -->
     <div class="top-products-card">
+        <!-- En-tête -->
         <div class="header">
             <h3>Top 5 des Produits</h3>
             <span class="subtitle">Les plus vendus</span>
         </div>
 
+        <!-- Liste des produits -->
         <div class="products-list">
+            <!-- Boucle sur les 5 meilleurs produits -->
             <div v-for="(produit, index) in top5Produits" :key="produit.id" class="product-item">
-                <!-- Badge de position (1, 2, 3...) -->
+                <!-- Badge de position (1, 2, 3...) : Le style s'adapte dynamiquement avec la classe rank-1, rank-2, etc. -->
                 <div class="rank" :class="'rank-' + (index + 1)">
                     {{ index + 1 }}
                 </div>
 
-                <!-- Infos du produit -->
+                <!-- Informations textuelles (Nom et Référence) -->
                 <div class="product-info">
                     <span class="product-name">{{ produit.nom }}</span>
                     <span class="product-ref">Réf: {{ produit.reference }}</span>
                 </div>
 
-                <!-- Métriques -->
+                <!-- Métriques (Nombre de ventes et Chiffre d'Affaires généré) -->
                 <div class="product-stats">
                     <span class="sales-count">{{ produit.ventes }} vendus</span>
                     <span class="revenue">{{ formatCurrency(produit.ca) }}</span>
                 </div>
             </div>
 
-            <!-- État vide si pas de données -->
+            <!-- État vide : Message affiché si le tableau est vide (ex: Nouvelle boutique) -->
             <div v-if="top5Produits.length === 0" class="empty-state">
                 Aucun produit à afficher
             </div>
@@ -36,7 +40,11 @@
 <script setup>
 import { computed } from 'vue';
 
+// ============================================================================
+// DÉFINITION DES PROPRIÉTÉS (PROPS)
+// ============================================================================
 const props = defineProps({
+    // Tableau des statistiques brutes (Contient tous les produits vendus)
     produits: {
         type: Array,
         required: true,
@@ -44,13 +52,27 @@ const props = defineProps({
     }
 });
 
-// On s'assure de ne prendre que les 5 premiers, et on les trie par ventes (optionnel si ton API le fait déjà)
+// ============================================================================
+// CALCULS RÉACTIFS (COMPUTED)
+// ============================================================================
+/**
+ * Trie le tableau entier des produits par ordre décroissant de ventes,
+ * et ne conserve que les 5 premiers éléments.
+ * Se met à jour automatiquement si la prop `produits` change.
+ */
 const top5Produits = computed(() => {
     return [...props.produits]
         .sort((a, b) => b.ventes - a.ventes) // Trie par ordre décroissant des ventes
         .slice(0, 5); // Garde uniquement les 5 premiers
 });
 
+// ============================================================================
+// FONCTIONS UTILITAIRES
+// ============================================================================
+/**
+ * Formate un nombre brut en devise (ex: 1250.5 -> "1 250,50 €")
+ * Utilise l'API native Intl du navigateur pour une localisation parfaite.
+ */
 const formatCurrency = (value) => {
     return new Intl.NumberFormat('fr-FR', {
         style: 'currency',
@@ -60,6 +82,7 @@ const formatCurrency = (value) => {
 </script>
 
 <style scoped>
+/* Style de la carte principale */
 .top-products-card {
     background: #ffffff;
     border-radius: 12px;
@@ -91,6 +114,7 @@ const formatCurrency = (value) => {
     gap: 1rem;
 }
 
+/* Style de chaque ligne de produit */
 .product-item {
     display: flex;
     align-items: center;
@@ -100,11 +124,13 @@ const formatCurrency = (value) => {
     transition: transform 0.2s ease;
 }
 
+/* Effet de glissement au survol de la ligne */
 .product-item:hover {
     transform: translateX(4px);
     background: #f3f4f6;
 }
 
+/* Style de base du rond de classement (Rank) */
 .rank {
     display: flex;
     align-items: center;
@@ -121,31 +147,31 @@ const formatCurrency = (value) => {
 }
 
 /* Couleurs spéciales pour le podium */
+/* Or */
 .rank-1 {
     background: #fef08a;
     color: #854d0e;
 }
 
-/* Or */
+/* Argent */
 .rank-2 {
     background: #e5e7eb;
     color: #374151;
 }
 
-/* Argent */
+/* Bronze */
 .rank-3 {
     background: #fed7aa;
     color: #9a3412;
 }
 
-/* Bronze */
-
+/* Section d'information au centre */
 .product-info {
     display: flex;
     flex-direction: column;
     flex-grow: 1;
     min-width: 0;
-    /* Permet la troncature du texte si trop long */
+    /* Permet la troncature du texte si trop long (avec les points de suspension) */
     margin-right: 1rem;
 }
 
@@ -155,7 +181,7 @@ const formatCurrency = (value) => {
     font-size: 0.95rem;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: ellipsis; /* Ajoute "..." si le nom dépasse */
 }
 
 .product-ref {
@@ -163,6 +189,7 @@ const formatCurrency = (value) => {
     color: #6b7280;
 }
 
+/* Section des compteurs (Droite) */
 .product-stats {
     display: flex;
     flex-direction: column;
@@ -181,6 +208,7 @@ const formatCurrency = (value) => {
     color: #6b7280;
 }
 
+/* Style du message "Aucun produit" */
 .empty-state {
     text-align: center;
     color: #9ca3af;

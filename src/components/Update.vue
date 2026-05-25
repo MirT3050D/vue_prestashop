@@ -1,3 +1,10 @@
+<!-- 
+  Composant Update.vue
+  Ce fichier est actuellement un brouillon (entièrement commenté).
+  Il devait probablement servir de fenêtre modale (Overlay) pour éditer rapidement un élément (Produit, Commande, etc.) 
+  sans quitter la page principale.
+-->
+
 <!-- <template>
   <div class="edit-overlay">
     <div class="form-container edit-mode">

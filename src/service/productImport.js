@@ -1,7 +1,13 @@
+// Importations de l'API
 import { getXml, postXml, putXml, formatApiError } from '@/service/api';
+// Mécanisme d'annulation et de nettoyage massif (Rollback)
 import { runResetForTargets } from '@/service/resetService';
 import { resetTargets } from '@/service/resetTargets';
 
+/**
+ * Fonction de secours. En cas d'erreur bloquante (ex: CSV malformé ou serveur injoignable),
+ * elle nettoie tous les produits fraîchement créés pour éviter une BDD fantôme (moitié pleine).
+ */
 export const rollbackProducts = async (logCallback) => {
   logCallback('info', 'Lancement de la réinitialisation des données (Sécurité)...');
   await runResetForTargets(resetTargets, (type, message) => {
@@ -10,6 +16,9 @@ export const rollbackProducts = async (logCallback) => {
   logCallback('info', 'Réinitialisation terminée. L\'import a été annulé.');
 };
 
+/**
+ * Normalise l'extraction XML
+ */
 function extractText(value) {
   if (value == null) return '';
   if (typeof value === 'string' || typeof value === 'number') return String(value);
@@ -17,8 +26,13 @@ function extractText(value) {
   return '';
 }
 
+// Variable de cache pour l'ID du pays par défaut de la boutique
 let defaultCountryIdCache = null;
 
+/**
+ * Récupère le pays par défaut configuré dans la boutique PrestaShop.
+ * Utilisé pour attacher correctement une nouvelle règle de taxe au pays du marchand.
+ */
 async function getDefaultCountryId() {
   if (defaultCountryIdCache) return defaultCountryIdCache;
   try {
@@ -33,9 +47,15 @@ async function getDefaultCountryId() {
   return defaultCountryIdCache;
 }
 
+/**
+ * Crée une Taxe à la volée si elle n'existe pas.
+ * Ex: Le CSV contient "taxe: 25%", cette taxe n'existe pas dans PrestaShop. 
+ * La fonction crée la Taxe (25), le Groupe de Règle de Taxe, et la Règle associée.
+ */
 async function createTaxAndGroup(taxRate, logCallback) {
   const countryId = await getDefaultCountryId();
 
+  // 1. Création de la taxe pure
   const taxPayload = {
     prestashop: {
       tax: {
@@ -57,6 +77,7 @@ async function createTaxAndGroup(taxRate, logCallback) {
     throw new Error(`Impossible de creer la taxe ${taxRate}%`);
   }
 
+  // 2. Création du Groupe de taxe (Le tiroir)
   const groupPayload = {
     prestashop: {
       tax_rule_group: {
@@ -72,6 +93,7 @@ async function createTaxAndGroup(taxRate, logCallback) {
     throw new Error(`Impossible de creer le groupe de taxe ${taxRate}%`);
   }
 
+  // 3. Création de la Règle (Relier la taxe au pays dans le tiroir)
   const rulePayload = {
     prestashop: {
       tax_rule: {
@@ -94,6 +116,10 @@ async function createTaxAndGroup(taxRate, logCallback) {
   return groupId;
 }
 
+/**
+ * Algorithme principal d'import de produits depuis un CSV.
+ * Gère les catégories manquantes, les taxes manquantes, le calcul des prix HT, et la conversion de date.
+ */
 export const processProductImport = async (data, logCallback) => {
   const categoryCache = {};
   const taxCache = {};
@@ -159,6 +185,7 @@ export const processProductImport = async (data, logCallback) => {
         continue;
       }
 
+      // PrestaShop stocke les prix en HT. On désapplique la taxe.
       const priceHT = priceTTC / (1 + (taxRate / 100));
 
       // Traitement du prix d'achat
@@ -181,13 +208,13 @@ export const processProductImport = async (data, logCallback) => {
         }
 
         const parts = trimmedDate.split('/');
-        formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+        formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}`; // Convertit en YYYY-MM-DD
       } else {
         logCallback('warn', `Ligne ${index + 1} : Aucune date renseignée. La date sera vide par défaut.`);
       }
 
       // ========================================================================
-      // RÉSOLUTION DES TAXES
+      // RÉSOLUTION DES TAXES (Matching Rate <-> ID)
       // ========================================================================
       let taxRulesGroupId = '0';
       if (taxRate > 0) {
@@ -220,6 +247,7 @@ export const processProductImport = async (data, logCallback) => {
               if (taxRulesGroupId !== '0') break;
             }
           }
+          // Si la taxe n'existe pas en BDD, on la crée à la volée.
           if (taxRulesGroupId === '0') {
             logCallback('warn', `Aucun groupe de taxe trouve pour le taux ${taxRate}%. Produit ${row.reference}. Creation automatique...`);
             try {
@@ -237,7 +265,7 @@ export const processProductImport = async (data, logCallback) => {
       // ========================================================================
       // RÉSOLUTION / CRÉATION DES CATÉGORIES
       // ========================================================================
-      let categoryId = '2';
+      let categoryId = '2'; // 2 = Accueil (Défaut)
       if (row.categorie) {
         const catName = row.categorie.trim();
         if (categoryCache[catName]) {
@@ -250,6 +278,7 @@ export const processProductImport = async (data, logCallback) => {
             if (categories) {
               categoryId = Array.isArray(categories) ? categories[0].id : categories.id;
             } else {
+              // Si la catégorie "T-Shirt" n'existe pas, on la fabrique.
               logCallback('info', `Création de la nouvelle catégorie "${catName}"...`);
               const newCatPayload = {
                 prestashop: {
@@ -265,7 +294,7 @@ export const processProductImport = async (data, logCallback) => {
                     link_rewrite: {
                       language: {
                         '@_id': '1',
-                        '#text': catName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+                        '#text': catName.toLowerCase().replace(/[^a-z0-9]+/g, '-') // Ex: t-shirt
                       }
                     }
                   }
@@ -298,7 +327,7 @@ export const processProductImport = async (data, logCallback) => {
             state: 1,
             active: 1,
             reference: row.reference,
-            price: priceHT.toFixed(6),
+            price: priceHT.toFixed(6), // HT, 6 décimales requises par l'API
             wholesale_price: finalWholesalePrice.toFixed(6),
             id_tax_rules_group: taxRulesGroupId,
             id_category_default: categoryId,
@@ -329,8 +358,10 @@ export const processProductImport = async (data, logCallback) => {
       const productId = newProductResp?.prestashop?.product?.id;
 
       // ========================================================================
-      // FORÇAGE DE LA DATE DE DISPONIBILITÉ
+      // FORÇAGE DE LA DATE DE DISPONIBILITÉ (Bug Connu PrestaShop)
       // ========================================================================
+      // Impossible d'injecter proprement une date dans le POST initial (plantage schema XSD).
+      // On la met à jour via un second appel (PUT).
       if (productId && formattedDate) {
         logCallback('info', `Mise à jour de la date de disponibilité vers ${formattedDate}...`);
         try {
@@ -340,6 +371,8 @@ export const processProductImport = async (data, logCallback) => {
             productToUpdate.prestashop.product.available_date = formattedDate;
 
             // NETTOYAGE VITAL : Empêche le crash (Erreur XML 127) de l'API lors du PUT
+            // PrestaShop retourne des champs virtuels (readonly) qu'il faut absolument
+            // supprimer du JSON avant de le renvoyer, sinon le serveur refuse la requête.
             delete productToUpdate.prestashop.product.manufacturer_name;
             delete productToUpdate.prestashop.product.quantity;
             delete productToUpdate.prestashop.product.id_default_image;
@@ -357,7 +390,7 @@ export const processProductImport = async (data, logCallback) => {
       }
 
       logCallback('success', `Ligne ${index + 1} (${row.nom}) importée avec succès.`);
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 500)); // Repos Serveur
     }
 
     logCallback('success', 'Import des produits terminé avec succès !');

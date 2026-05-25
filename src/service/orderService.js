@@ -1,8 +1,11 @@
-
+// Importation des méthodes de base (CRUD) pour les requêtes HTTP vers l'API XML
 import { getXml, postXml, putXml, deleteXml } from '@/service/api';
 
 /**
- * Normalizes PrestaShop resource nodes to always return an array.
+ * Normalise les nœuds de ressources PrestaShop pour s'assurer de toujours manipuler un tableau.
+ * 
+ * @param {Object} node Le nœud parent (ex: response.prestashop.orders)
+ * @param {string} singularKey La clé de l'élément (ex: 'order')
  */
 function normalizeArray(node, singularKey) {
     if (!node || node === '') return [];
@@ -12,7 +15,9 @@ function normalizeArray(node, singularKey) {
 }
 
 /**
- * Fetches all orders from the PrestaShop API.
+ * Récupère l'ensemble des commandes de la boutique.
+ * 
+ * @param {string|Object} params Paramètres de filtrage optionnels (par défaut: display=full)
  */
 export async function getOrders(params = 'display=full') {
     const query = typeof params === 'object' ? new URLSearchParams(params).toString() : params;
@@ -21,17 +26,22 @@ export async function getOrders(params = 'display=full') {
 }
 
 /**
- * Fetches the orders for one customer.
- *
- * @param {string|number} customerId The customer identifier.
+ * Récupère uniquement les commandes passées par un client spécifique.
+ * Très utile pour la page "Historique de mes commandes" côté Front-Office.
+ * 
+ * @param {string|number} customerId L'identifiant du client
  */
 export async function getCustomerOrders(customerId) {
     if (!customerId) return [];
+    // Filtre les commandes par l'ID du client en utilisant la syntaxe native PrestaShop filter[id]=[]
     return await getOrders(`display=full&filter[id_customer]=[${customerId}]`);
 }
 
 /**
- * Fetches a single order.
+ * Récupère le détail complet d'une seule commande via son ID.
+ * 
+ * @param {string|number} id L'ID de la commande
+ * @param {string|Object} params Paramètres optionnels
  */
 export async function getOrder(id, params = '') {
     const query = typeof params === 'object' ? new URLSearchParams(params).toString() : params;
@@ -40,7 +50,9 @@ export async function getOrder(id, params = '') {
 }
 
 /**
- * Creates a new order.
+ * Crée une nouvelle commande sur l'API (Ressource très complexe, généralement gérée par checkoutService).
+ * 
+ * @param {string|Object} payload Le payload XML complet de l'objet <order>
  */
 export async function createOrder(payload) {
     const response = await postXml('/orders', payload);
@@ -48,7 +60,7 @@ export async function createOrder(payload) {
 }
 
 /**
- * Updates an order.
+ * Met à jour une commande existante (Globalement déconseillé, privilégier l'historique d'état).
  */
 export async function updateOrder(id, payload) {
     const response = await putXml(`/orders/${id}`, payload);
@@ -56,14 +68,15 @@ export async function updateOrder(id, payload) {
 }
 
 /**
- * Deletes an order.
+ * Supprime une commande de la BDD (Action dangereuse, rare en e-commerce).
  */
 export async function deleteOrder(id) {
     return await deleteXml(`/orders/${id}`);
 }
 
 /**
- * Fetches all possible order states.
+ * Récupère la liste de tous les statuts possibles d'une commande configurés dans PrestaShop 
+ * (ex: En cours, Livré, Annulé, Paiement accepté...).
  */
 export async function getOrderStates() {
     const response = await getXml('/order_states?display=full');
@@ -71,17 +84,24 @@ export async function getOrderStates() {
 }
 
 /**
- * Updates order status using order history creation.
- * This is the native PrestaShop workflow and avoids full order PUT issues.
- *
- * @param {string} orderId The ID of the order to update.
- * @param {string} newStateId The target order state ID.
+ * Modifie le statut d'une commande (ex: passer de "En préparation" à "Livré").
+ * ATTENTION: Dans PrestaShop, on ne fait pas un PUT sur la commande pour changer le statut. 
+ * On POST un nouvel "historique" (order_history) qui fera basculer l'état actuel de la commande automatiquement.
+ * Cela permet de tracer qui a changé l'état et quand.
+ * 
+ * @param {string} orderId L'ID de la commande à mettre à jour
+ * @param {string} newStateId L'ID du nouveau statut désiré
+ * @param {Object} options Options supplémentaires pour l'employé
  */
 export async function updateOrderStatus(orderId, newStateId, options = {}) {
     const stateId = String(newStateId);
+    
+    // Certains statuts très spécifiques (comme 5 ou 6, ex: Annulé ou Livré selon les config) 
+    // peuvent avoir un endpoint backend custom créé par un développeur tiers.
     const useCustomEndpoint = stateId === '5' || stateId === '6';
 
     if (useCustomEndpoint) {
+        // Envoi vers un web-service customisé
         const { employeeId = 0, date = '' } = options;
         const payload = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
@@ -96,6 +116,7 @@ export async function updateOrderStatus(orderId, newStateId, options = {}) {
         return await postXml('/custom_order_state', payload);
     }
 
+    // VOIE NATIVE STANDARD : Création d'une ligne d'historique
     const payload = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
     <order_history>
@@ -104,30 +125,36 @@ export async function updateOrderStatus(orderId, newStateId, options = {}) {
     </order_history>
 </prestashop>`;
 
+    // Appelle la ressource `order_histories` pour déclencher le changement d'état
     return await postXml('/order_histories', payload);
 }
 
 /**
- * Alias for updateOrderStatus.
+ * Alias de compatibilité pour updateOrderStatus
  */
 export async function updateOrderStatusByHistory(orderId, newStateId) {
     return await updateOrderStatus(orderId, newStateId);
 }
 
 /**
- * Parse les order states et construit les maps de noms et couleurs.
- * @param {Array} statesData - Les données brutes des order states
- * @returns {{ nameMap: Map, colorMap: Map, idByNameLower: Map }}
+ * Parse les statuts de commandes bruts (XML JSONifié) pour construire des "Maps" rapides en mémoire.
+ * Cela permet d'afficher rapidement le texte et la couleur d'un badge statut sans devoir boucler.
+ * 
+ * @param {Array} statesData Les données brutes issues de getOrderStates()
+ * @returns {{ nameMap: Map, colorMap: Map, idByNameLower: Map }} Trois dictionnaires (Clé->Valeur) utiles
  */
 export function parseOrderStates(statesData) {
-    const nameMap = new Map();
-    const colorMap = new Map();
-    const idByNameLower = new Map();
+    const nameMap = new Map(); // Permet d'obtenir un Nom depuis un ID
+    const colorMap = new Map(); // Permet d'obtenir une Couleur HTML depuis un ID
+    const idByNameLower = new Map(); // Permet d'obtenir un ID depuis un nom (minuscule)
 
+    // Boucle de construction des dictionnaires
     for (let i = 0; i < statesData.length; i++) {
         const state = statesData[i];
         const langNode = state.name?.language;
         let stateText = '';
+        
+        // Extraction multilingue sécurisée
         if (Array.isArray(langNode)) {
             stateText = langNode[0]['#text'] || '';
         } else if (langNode && typeof langNode === 'object') {
@@ -136,9 +163,12 @@ export function parseOrderStates(statesData) {
             stateText = langNode;
         }
 
+        // Nettoyage de l'ID XML
         const idKey = typeof state.id === 'object' ? String(state.id['#text'] ?? state.id) : String(state.id ?? '');
+        
+        // Remplissage des Maps
         nameMap.set(idKey, stateText);
-        colorMap.set(idKey, state.color);
+        colorMap.set(idKey, state.color); // Ex: "#FF0000" pour rouge
         idByNameLower.set(stateText.toLowerCase(), idKey);
     }
 
@@ -146,20 +176,27 @@ export function parseOrderStates(statesData) {
 }
 
 /**
- * Récupère le nom d'un état de commande.
+ * Extrait le nom d'un statut via son ID, en utilisant la Map pré-calculée.
+ * 
+ * @param {string} stateId L'ID de l'état
+ * @param {Map} nameMap Le dictionnaire des noms
  */
 export function getStateName(stateId, nameMap) {
+    // Cas spécial géré par l'application locale
     if (stateId === 'dans_le_panier') return 'Dans le panier';
+    // Extraction sécurisée de l'ID XML
     const idKey = typeof stateId === 'object' ? String(stateId['#text'] ?? stateId) : String(stateId ?? '');
     return nameMap.get(idKey) || 'Inconnu';
 }
 
 /**
- * Récupère la couleur d'un état de commande.
+ * Extrait la couleur HEX (#XXXXXX) d'un statut via son ID, en utilisant la Map pré-calculée.
+ * Parfait pour colorier les badges "En cours" "Annulé" etc.
  */
 export function getStateColor(stateId, colorMap) {
-    if (stateId === 'dans_le_panier') return '#94a3b8';
+    // Cas spécial pour les paniers non convertis
+    if (stateId === 'dans_le_panier') return '#94a3b8'; // Gris slate
+    // Extraction sécurisée de l'ID XML
     const idKey = typeof stateId === 'object' ? String(stateId['#text'] ?? stateId) : String(stateId ?? '');
-    return colorMap.get(idKey) || '#cccccc';
+    return colorMap.get(idKey) || '#cccccc'; // Gris par défaut
 }
-

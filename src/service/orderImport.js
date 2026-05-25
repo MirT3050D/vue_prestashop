@@ -1,14 +1,19 @@
+// Importations des utilitaires réseau et de gestion des prix
 import { getXml, postXml, putXml, deleteXml, getPrestaShopConfig, formatApiError } from '@/service/api';
 import { runResetForTargets } from '@/service/resetService';
 import { resetTargets } from '@/service/resetTargets';
 import { getProductTaxRate } from '@/service/price';
 
+// Définition des entités à vider en cas d'annulation totale (Rollback) des commandes
 export const resetOrderTargets = [
     { key: 'orders', label: 'Commandes', endpoint: '/orders', collectionKey: 'orders', itemKey: 'order', skipIds: [] },
     { key: 'addresses', label: 'Adresses Clients', endpoint: '/addresses', collectionKey: 'addresses', itemKey: 'address', skipIds: [] },
     { key: 'customers', label: 'Clients', endpoint: '/customers', collectionKey: 'customers', itemKey: 'customer', skipIds: [] }
 ];
 
+/**
+ * Fonction de secours (Rollback) : Efface toutes les commandes, adresses et clients créés.
+ */
 export const rollbackOrders = async (logCallback) => {
     logCallback('info', 'Lancement de la réinitialisation des commandes...');
     await runResetForTargets(resetOrderTargets, (type, message) => {
@@ -17,31 +22,48 @@ export const rollbackOrders = async (logCallback) => {
     logCallback('info', 'Réinitialisation terminée.');
 };
 
+/**
+ * Nettoie les caractères parasites (guillemets Excel) d'une chaîne CSV.
+ */
 function cleanQuotes(str) {
     return str.replace(/[\u2018\u2019\u201A\u201B\u2032\u2039\u0027']/g, "'").replace(/[\u201C\u201D\u201E\u2033\u203A\u0022"]/g, '"').replace(/\u00A0/g, ' ').trim();
 }
 
+/**
+ * Parse une cellule CSV complexe contenant les achats.
+ * Format attendu: [(REF1; 2; Couleur), (REF2; 1; Taille)]
+ * Retourne un tableau d'objets { reference, quantite, variante }
+ */
 function parseAchat(achatString) {
     if (!achatString) return [];
     const cleanStr = cleanQuotes(achatString);
     if (!cleanStr.includes('[')) return [];
+    // Extraction du contenu entre les crochets
     const content = cleanStr.substring(cleanStr.indexOf('[') + 1, cleanStr.lastIndexOf(']')).trim();
     if (!content) return [];
+    
     const items = [];
     let currentItem = '';
     let inTuple = false;
+    
+    // Machine à état simple pour extraire les tuples ( )
     for (let i = 0; i < content.length; i++) {
         const char = content[i];
         if (char === '(') { inTuple = true; currentItem = ''; }
         else if (char === ')') { inTuple = false; items.push(currentItem); }
         else if (inTuple) currentItem += char;
     }
+    
+    // Découpage par point-virgule
     return items.map(item => {
         const parts = item.split(';').map(p => cleanQuotes(p).replace(/^"|"$/g, '').trim());
         return { reference: parts[0] || '', quantite: parseInt(parts[1], 10) || 1, variante: parts[2] || '' };
     });
 }
 
+/**
+ * Génère une référence de commande aléatoire de 9 lettres (Format standard PrestaShop).
+ */
 function generateOrderReference() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     let result = '';
@@ -49,20 +71,29 @@ function generateOrderReference() {
     return result;
 }
 
+/**
+ * Mappe un texte d'état (ex: "Livré") vers un ID de statut PrestaShop.
+ */
 function resolveOrderStateId(etatRaw) {
     const value = String(etatRaw || '').toLowerCase();
-    if (value.includes('livr')) return 5;
-    if (value.includes('annul') || value.includes('cancel')) return 6;
-    if (value.includes('accept') || value.includes('pay') || value.includes('paiement')) return 2;
-    return 6;
+    if (value.includes('livr')) return 5; // ID natif "Livré"
+    if (value.includes('annul') || value.includes('cancel')) return 6; // Annulé
+    if (value.includes('accept') || value.includes('pay') || value.includes('paiement')) return 2; // Paiement accepté
+    return 6; // Par défaut Annulé si inconnu
 }
 
+/**
+ * Extraction sécurisée d'un ID XML (gère les objets '#text' ou '@_id').
+ */
 function extractId(node) {
     if (node === undefined || node === null) return '';
     if (typeof node === 'object') return String(node['#text'] || node['@_id'] || node.id || '');
     return String(node);
 }
 
+/**
+ * Extraction multilingue du texte.
+ */
 function getLangText(field) {
     if (!field || !field.language) return '';
     if (Array.isArray(field.language)) return field.language[0]['#text'];
@@ -72,6 +103,10 @@ function getLangText(field) {
 // ============================================================================
 // TRACER LE MOUVEMENT SANS TOUCHER AU STOCK PHYSIQUE
 // ============================================================================
+/**
+ * Historise le mouvement de stock (stock_mvt) lors de l'import, 
+ * sans impacter la quantité disponible actuelle (car l'import est souvent un historique).
+ */
 async function logOrderMovement(pId, attributeId, quantity, orderId, employeeId, logCallback, customDate = '') {
     try {
         const dateAdd = customDate ? `${customDate} 12:00:00` : new Date().toISOString().slice(0, 19).replace('T', ' ');
@@ -180,6 +215,9 @@ async function logOrderMovement(pId, attributeId, quantity, orderId, employeeId,
     }
 }
 
+/**
+ * Force l'état d'une commande via un POST historique d'état.
+ */
 async function forceOrderState(orderId, stateId, logCallback, options = {}) {
     const stateIdValue = String(stateId);
     const useCustomEndpoint = stateIdValue === '5' || stateIdValue === '6';
@@ -213,8 +251,19 @@ async function forceOrderState(orderId, stateId, logCallback, options = {}) {
     }
 }
 
+/**
+ * Algorithme principal : Parse le CSV importé et génère les commandes historiques avec leurs clients et paniers.
+ * Flux de l'import :
+ * 1. Recherche ou Création du Client.
+ * 2. Recherche ou Création de l'Adresse.
+ * 3. Création du Panier contenant les produits mentionnés.
+ * 4. Transformation du Panier en Commande ferme.
+ * 5. Modification rétroactive de la date (pour correspondre au CSV d'historique).
+ * 6. Forçage du Statut (Livré, Annulé...).
+ */
 export const processOrderImport = async (data, logCallback) => {
     if (!data || data.length === 0) { logCallback('warn', 'CSV vide.'); return; }
+    // Normalise les headers du CSV en minuscules
     data = data.map(row => { const newRow = {}; for (const key in row) newRow[key.trim().toLowerCase()] = row[key]; return newRow; });
     const employeeId = 1;
 
@@ -231,6 +280,7 @@ export const processOrderImport = async (data, logCallback) => {
             if (!email) continue;
             logCallback('info', `--- Ligne ${index + 1} (Client : ${nom}) ---`);
 
+            // ÉTAPE 1 : Gestion Client
             let customerId = null;
             const customerSearch = await getXml(`/customers?filter[email]=[${email}]&display=[id]`);
             let existingCustomer = customerSearch?.prestashop?.customers?.customer;
@@ -249,6 +299,7 @@ export const processOrderImport = async (data, logCallback) => {
                 customerId = extractId(newCustomerResp?.prestashop?.customer?.id);
             }
 
+            // ÉTAPE 2 : Gestion Adresse
             let addressId = null;
             const addressSearch = await getXml(`/addresses?filter[id_customer]=[${customerId}]&display=[id]`);
             let existingAddress = addressSearch?.prestashop?.addresses?.address;
@@ -272,6 +323,7 @@ export const processOrderImport = async (data, logCallback) => {
             let cartTotalTtc = 0;
             const linesToDecrement = [];
 
+            // Fusion des doublons d'achats sur la même ligne
             const mergedAchats = [];
             for (const achat of achats) {
                 const existing = mergedAchats.find(a => a.reference === achat.reference && a.variante === achat.variante);
@@ -282,6 +334,7 @@ export const processOrderImport = async (data, logCallback) => {
                 }
             }
 
+            // Calcul du prix et du contenu du panier
             for (const achat of mergedAchats) {
                 const prodSearch = await getXml(`/products?filter[reference]=[${achat.reference}]&display=[id,price,name]`);
                 let prod = prodSearch?.prestashop?.products?.product;
@@ -293,6 +346,7 @@ export const processOrderImport = async (data, logCallback) => {
                 let prodName = getLangText(prod.name) || 'Produit';
                 let attributeId = 0;
 
+                // Cas d'une déclinaison spécifique
                 if (achat.variante) {
                     const combSearch = await getXml(`/combinations?filter[id_product]=[${pId}]&filter[reference]=[${achat.reference}_${achat.variante}]&display=[id,price]`);
                     let comb = combSearch?.prestashop?.combinations?.combination;
@@ -314,10 +368,12 @@ export const processOrderImport = async (data, logCallback) => {
 
                 linesToDecrement.push({ pId, attributeId, quantity: achat.quantite });
 
+                // Fabrication des noeuds XML
                 cartRowsXml += `<cart_row><id_product><![CDATA[${pId}]]></id_product><id_product_attribute><![CDATA[${attributeId}]]></id_product_attribute><id_address_delivery><![CDATA[${addressId}]]></id_address_delivery><quantity><![CDATA[${achat.quantite}]]></quantity></cart_row>`;
                 orderRowsXml += `<order_row><product_id><![CDATA[${pId}]]></product_id><product_attribute_id><![CDATA[${attributeId}]]></product_attribute_id><product_quantity><![CDATA[${achat.quantite}]]></product_quantity><product_name><![CDATA[${prodName}]]></product_name><product_reference><![CDATA[${achat.reference}]]></product_reference><product_price><![CDATA[${basePriceHt.toFixed(6)}]]></product_price><unit_price_tax_incl><![CDATA[${basePriceTtc.toFixed(6)}]]></unit_price_tax_incl><unit_price_tax_excl><![CDATA[${basePriceHt.toFixed(6)}]]></unit_price_tax_excl></order_row>`;
             }
 
+            // Gestion de la Date
             let formattedDate = null;
             if (dateRaw && dateRaw.trim() !== '') {
                 const trimmedDate = dateRaw.trim();
@@ -328,13 +384,14 @@ export const processOrderImport = async (data, logCallback) => {
                 }
 
                 const parts = trimmedDate.split('/');
-                formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+                formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}`; // YYYY-MM-DD
             } else {
                 formattedDate = new Date().toISOString().slice(0, 10);
             }
 
             if (!cartRowsXml) { logCallback('warn', `Panier vide pour la ligne ${index + 1}, ignorée.`); continue; }
 
+            // ÉTAPE 3 : Création Panier
             const cartPayload = `<?xml version="1.0" encoding="UTF-8"?><prestashop><cart><id_customer><![CDATA[${customerId}]]></id_customer><id_address_delivery><![CDATA[${addressId}]]></id_address_delivery><id_address_invoice><![CDATA[${addressId}]]></id_address_invoice><id_currency><![CDATA[1]]></id_currency><id_lang><![CDATA[1]]></id_lang><associations><cart_rows>${cartRowsXml}</cart_rows></associations></cart></prestashop>`;
             const newCartResp = await postXml('/carts', cartPayload);
             const cartId = extractId(newCartResp?.prestashop?.cart?.id);
@@ -346,6 +403,7 @@ export const processOrderImport = async (data, logCallback) => {
 
             if (!etatRaw || etatRaw === '') { logCallback('warn', `Ligne ${index + 1} : Panier Abandonné #${cartId} conservé.`); continue; }
 
+            // ÉTAPE 4 : Transformation en Commande
             const orderStateId = resolveOrderStateId(etatRaw);
             if (logCallback) {
                 logCallback('info', `État import: "${etatRaw}" -> ${orderStateId}`);
