@@ -13,7 +13,6 @@ async function fetchCustomers() {
   try {
     const data = await getCustomers({
       display: '[id,firstname,lastname,email]',
-      limit: '12',
       sort: '[id_DESC]'
     });
     
