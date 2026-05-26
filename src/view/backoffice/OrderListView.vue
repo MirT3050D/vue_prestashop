@@ -55,7 +55,8 @@
                 </span>
               </td>
               <td>
-                <select v-if="!order.isCart" @change="onStatusChange(order.id, $event.target.value)" class="status-select"
+                <select v-if="!order.isCart" @change="onStatusChange(order.id, $event.target.value)"
+                  class="status-select"
                   :disabled="isUpdating[order.id] || isDeliveredState(order.current_state) || isCanceledState(order.current_state)">
                   <option disabled selected>-- Changer --</option>
                   <option v-for="state in targetStates" :key="normalizeId(state.id)" :value="normalizeId(state.id)">
@@ -88,8 +89,10 @@
                       <span>{{ row.product_quantity }}</span>
                       <span>{{ toNumber(row.unit_price_tax_excl).toFixed(2) }} €</span>
                       <span>{{ toNumber(row.unit_price_tax_incl).toFixed(2) }} €</span>
-                      <span>{{ (toNumber(row.unit_price_tax_excl) * toNumber(row.product_quantity)).toFixed(2) }} €</span>
-                      <span>{{ (toNumber(row.unit_price_tax_incl) * toNumber(row.product_quantity)).toFixed(2) }} €</span>
+                      <span>{{ (toNumber(row.unit_price_tax_excl) * toNumber(row.product_quantity)).toFixed(2) }}
+                        €</span>
+                      <span>{{ (toNumber(row.unit_price_tax_incl) * toNumber(row.product_quantity)).toFixed(2) }}
+                        €</span>
                     </div>
                   </div>
                 </Dropdown>
@@ -104,9 +107,9 @@
 
 <script setup>
 import { ref, onMounted, computed } from 'vue';
-import { 
-  fetchOrderListData, 
-  filterOrdersList, 
+import {
+  fetchOrderListData,
+  filterOrdersList,
   normalizeId as svcNormalizeId,
   toNumber as svcToNumber,
   getOrderRows as svcGetOrderRows,
@@ -148,6 +151,7 @@ async function fetchData() {
     stateNameMapping = data.stateNameMapping;
     stateColorMapping = data.stateColorMapping;
     stateIdByNameLower = data.stateIdByNameLower;
+    console.log("order", orders.value);
   } catch (e) {
     error.value = e.message;
   } finally {

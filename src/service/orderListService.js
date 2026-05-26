@@ -3,6 +3,7 @@ import { getCarts } from '@/service/cartService';
 import { getXml, postXml } from '@/service/api';
 import { extractText } from '@/service/prestashopUtils';
 import { forceUpdateStockAvailable } from '@/service/checkoutService';
+import { getProduct } from '@/service/productService';
 
 export function normalizeId(id) {
   if (id && typeof id === 'object') {
@@ -80,22 +81,91 @@ export async function fetchOrderListData() {
     return rows.length > 0;
   });
 
-  const normalizedCarts = activeCarts.map(cart => {
+  // On utilise Promise.all car la récupération des produits est asynchrone
+  const normalizedCarts = await Promise.all(activeCarts.map(async cart => {
     let customerData = null;
     if (cart.customer) {
       customerData = cart.customer;
+    }
+
+    const cartRows = getCartRows(cart);
+    let total_paid = 0;
+    const order_row = [];
+
+    // On parcourt chaque produit du panier pour récupérer son nom et son prix via l'API
+    for (const row of cartRows) {
+      const productId = normalizeId(row.id_product);
+      const quantity = parseInt(normalizeId(row.quantity), 10) || 0;
+      
+      let productName = `Produit #${productId}`;
+      let productRef = '';
+      let unitPrice = 0;
+
+      if (productId) {
+        try {
+          // Appel à l'API pour récupérer les infos complètes du produit
+          const productData = await getProduct(productId);
+          if (productData) {
+            // Extraction sécurisée du nom du produit (gestion du format XML multilingue)
+            if (productData.name && productData.name.language) {
+               const lang = productData.name.language;
+               productName = Array.isArray(lang) ? (lang[0]['#text'] || lang[0]) : (lang['#text'] || lang);
+            } else if (typeof productData.name === 'string') {
+               productName = productData.name;
+            }
+            
+            // Extraction de la référence
+            if (productData.reference && typeof productData.reference === 'object') {
+                productRef = productData.reference['#text'] || '';
+            } else {
+                productRef = productData.reference || '';
+            }
+            
+            // Extraction du prix (on récupère le prix de base du produit)
+            if (productData.price && typeof productData.price === 'object') {
+                unitPrice = parseFloat(productData.price['#text']) || 0;
+            } else {
+                unitPrice = parseFloat(productData.price) || 0;
+            }
+          }
+        } catch (e) {
+          console.warn(`Erreur lors de la récupération du produit ${productId} pour le panier ${cart.id}:`, e.message);
+        }
+      }
+
+      // Ajout au total du panier (prix * quantité)
+      total_paid += unitPrice * quantity;
+
+      // On formate la ligne pour qu'elle ait exactement la même structure qu'une ligne de commande (order_row)
+      // Cela permet à la vue OrderListView.vue de l'afficher sans aucune modification
+      order_row.push({
+        id: productId,
+        product_id: productId,
+        product_attribute_id: normalizeId(row.id_product_attribute),
+        product_name: productName,
+        product_reference: productRef,
+        product_quantity: quantity,
+        unit_price_tax_excl: unitPrice,
+        unit_price_tax_incl: unitPrice, // Simplification : on met le même prix en TTC
+      });
     }
 
     return {
       id: normalizeId(cart.id),
       reference: `PANIER #${normalizeId(cart.id)}`,
       id_customer: cart.id_customer,
-      total_paid: 0,
+      total_paid: total_paid,
       current_state: 'dans_le_panier',
       isCart: true,
-      customer: customerData
+      customer: customerData,
+      // Ajout de l'objet associations pour imiter la structure d'une commande
+      associations: {
+        order_rows: {
+          order_row: order_row
+        }
+      }
     };
-  });
+  }));
 
   const orders = [...ordersData, ...normalizedCarts];
   orders.sort((orderA, orderB) => orderB.id - orderA.id);
